@@ -59,3 +59,4 @@ export interface TopicStats {
 export declare function createPeerStats(ps?: Partial<PeerStats>): PeerStats;
 export declare function createTopicStats(ts?: Partial<TopicStats>): TopicStats;
 export declare function ensureTopicStats(topic: string, ps: PeerStats, params: PeerScoreParams): TopicStats | undefined;
+//# sourceMappingURL=peer-stats.d.ts.map

@@ -1974,3 +1974,4 @@ class Gossipsub extends libp2p_1.EventEmitter {
 }
 exports.default = Gossipsub;
 Gossipsub.multicodec = constants.GossipsubIDv11;
+//# sourceMappingURL=index.js.map

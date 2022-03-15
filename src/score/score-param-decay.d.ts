@@ -7,3 +7,4 @@ export declare function scoreParameterDecay(decay: number): number;
  * ScoreParameterDecay computes the decay factor for a parameter using base as the DecayInterval
  */
 export declare function scoreParameterDecayWithBase(decay: number, base: number, decayToZero: number): number;
+//# sourceMappingURL=score-param-decay.d.ts.map

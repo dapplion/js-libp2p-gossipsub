@@ -77,3 +77,4 @@ export declare class MessageCache {
     remove(msgId: MsgIdStr): MessageCacheEntry | null;
 }
 export {};
+//# sourceMappingURL=message-cache.d.ts.map

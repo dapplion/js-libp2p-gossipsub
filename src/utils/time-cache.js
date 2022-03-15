@@ -50,3 +50,4 @@ class SimpleTimeCache {
     }
 }
 exports.SimpleTimeCache = SimpleTimeCache;
+//# sourceMappingURL=time-cache.js.map

@@ -40,3 +40,4 @@ function validatePeerScoreThresholds(p) {
     }
 }
 exports.validatePeerScoreThresholds = validatePeerScoreThresholds;
+//# sourceMappingURL=peer-score-thresholds.js.map

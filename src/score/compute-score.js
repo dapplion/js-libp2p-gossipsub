@@ -70,3 +70,4 @@ function computeScore(peer, pstats, params, peerIPs) {
     return score;
 }
 exports.computeScore = computeScore;
+//# sourceMappingURL=compute-score.js.map

@@ -26,3 +26,4 @@ export declare type GossipsubOptsSpec = {
     /** seenTTL is the number of milliseconds to retain message IDs in the seen cache */
     seenTTL: number;
 };
+//# sourceMappingURL=config.d.ts.map

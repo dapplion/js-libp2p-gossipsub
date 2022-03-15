@@ -21,3 +21,4 @@ __exportStar(require("./has-gossip-protocol"), exports);
 __exportStar(require("./messageIdToString"), exports);
 var publishConfig_1 = require("./publishConfig");
 Object.defineProperty(exports, "getPublishConfigFromPeerId", { enumerable: true, get: function () { return publishConfig_1.getPublishConfigFromPeerId; } });
+//# sourceMappingURL=index.js.map

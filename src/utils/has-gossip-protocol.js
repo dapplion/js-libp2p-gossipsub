@@ -6,3 +6,4 @@ function hasGossipProtocol(protocol) {
     return protocol === constants_1.GossipsubIDv10 || protocol === constants_1.GossipsubIDv11;
 }
 exports.hasGossipProtocol = hasGossipProtocol;
+//# sourceMappingURL=has-gossip-protocol.js.map

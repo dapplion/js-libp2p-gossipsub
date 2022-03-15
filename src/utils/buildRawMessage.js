@@ -120,3 +120,4 @@ async function validateToRawMessage(signaturePolicy, msg) {
     }
 }
 exports.validateToRawMessage = validateToRawMessage;
+//# sourceMappingURL=buildRawMessage.js.map

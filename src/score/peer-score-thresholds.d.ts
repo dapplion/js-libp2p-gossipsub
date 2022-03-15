@@ -28,3 +28,4 @@ export interface PeerScoreThresholds {
 export declare const defaultPeerScoreThresholds: PeerScoreThresholds;
 export declare function createPeerScoreThresholds(p?: Partial<PeerScoreThresholds>): PeerScoreThresholds;
 export declare function validatePeerScoreThresholds(p: PeerScoreThresholds): void;
+//# sourceMappingURL=peer-score-thresholds.d.ts.map

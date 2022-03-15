@@ -20,3 +20,4 @@ export declare type ScoreWeights<T> = {
 export declare function computeScoreWeights(peer: string, pstats: PeerStats, params: PeerScoreParams, peerIPs: Map<string, Set<string>>, topicStrToLabel: TopicStrToLabel): ScoreWeights<number>;
 export declare function computeAllPeersScoreWeights(peerIdStrs: IterableIterator<string>, peerStats: Map<string, PeerStats>, params: PeerScoreParams, peerIPs: Map<string, Set<string>>, topicStrToLabel: TopicStrToLabel): ScoreWeights<number[]>;
 export {};
+//# sourceMappingURL=scoreMetrics.d.ts.map

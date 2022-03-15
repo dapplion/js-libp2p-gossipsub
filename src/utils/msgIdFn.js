@@ -25,3 +25,4 @@ async function msgIdFnStrictNoSign(msg) {
     return sha2_1.sha256.encode(msg.data);
 }
 exports.msgIdFnStrictNoSign = msgIdFnStrictNoSign;
+//# sourceMappingURL=msgIdFn.js.map

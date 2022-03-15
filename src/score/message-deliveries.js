@@ -74,3 +74,4 @@ class MessageDeliveries {
     }
 }
 exports.MessageDeliveries = MessageDeliveries;
+//# sourceMappingURL=message-deliveries.js.map

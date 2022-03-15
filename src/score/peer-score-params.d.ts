@@ -121,3 +121,4 @@ export declare function createPeerScoreParams(p?: Partial<PeerScoreParams>): Pee
 export declare function createTopicScoreParams(p?: Partial<TopicScoreParams>): TopicScoreParams;
 export declare function validatePeerScoreParams(p: PeerScoreParams): void;
 export declare function validateTopicScoreParams(p: TopicScoreParams): void;
+//# sourceMappingURL=peer-score-params.d.ts.map

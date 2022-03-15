@@ -34,3 +34,4 @@ function getPublishConfigFromPeerId(signaturePolicy, peerId) {
     }
 }
 exports.getPublishConfigFromPeerId = getPublishConfigFromPeerId;
+//# sourceMappingURL=publishConfig.js.map

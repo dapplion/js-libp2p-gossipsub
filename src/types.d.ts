@@ -138,3 +138,4 @@ export declare type GossipsubMessage = {
  */
 export declare function rejectReasonFromAcceptance(acceptance: Exclude<MessageAcceptance, MessageAcceptance.Accept>): RejectReason.Ignore | RejectReason.Reject;
 export {};
+//# sourceMappingURL=types.d.ts.map

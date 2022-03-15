@@ -99,3 +99,4 @@ function rejectReasonFromAcceptance(acceptance) {
     }
 }
 exports.rejectReasonFromAcceptance = rejectReasonFromAcceptance;
+//# sourceMappingURL=types.js.map

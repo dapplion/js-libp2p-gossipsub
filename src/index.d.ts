@@ -377,3 +377,4 @@ export default class Gossipsub extends EventEmitter {
     private onScrapeMetrics;
 }
 export {};
+//# sourceMappingURL=index.d.ts.map

@@ -21,3 +21,4 @@ function scoreParameterDecayWithBase(decay, base, decayToZero) {
     return decayToZero ** (1 / ticks);
 }
 exports.scoreParameterDecayWithBase = scoreParameterDecayWithBase;
+//# sourceMappingURL=score-param-decay.js.map

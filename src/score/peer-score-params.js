@@ -167,3 +167,4 @@ function validateTopicScoreParams(p) {
     }
 }
 exports.validateTopicScoreParams = validateTopicScoreParams;
+//# sourceMappingURL=peer-score-params.js.map

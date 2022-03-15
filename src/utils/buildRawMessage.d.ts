@@ -11,3 +11,4 @@ export declare type ValidationResult = {
     error: ValidateError;
 };
 export declare function validateToRawMessage(signaturePolicy: SignaturePolicy, msg: RPC.IMessage): Promise<ValidationResult>;
+//# sourceMappingURL=buildRawMessage.d.ts.map

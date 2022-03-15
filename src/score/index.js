@@ -17,3 +17,4 @@ Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./peer-score-params"), exports);
 __exportStar(require("./peer-score-thresholds"), exports);
 __exportStar(require("./peer-score"), exports);
+//# sourceMappingURL=index.js.map

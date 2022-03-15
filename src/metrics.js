@@ -507,3 +507,4 @@ function getMetrics(register, topicStrToLabel) {
     };
 }
 exports.getMetrics = getMetrics;
+//# sourceMappingURL=metrics.js.map

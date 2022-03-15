@@ -11,3 +11,4 @@ function messageIdFromString(msgId) {
     return (0, from_string_1.fromString)(msgId, 'base64');
 }
 exports.messageIdFromString = messageIdFromString;
+//# sourceMappingURL=messageIdToString.js.map

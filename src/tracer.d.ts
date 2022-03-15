@@ -36,3 +36,4 @@ export declare class IWantTracer {
     rejectMessage(msgIdStr: MsgIdStr, reason: RejectReason): void;
     clear(): void;
 }
+//# sourceMappingURL=tracer.d.ts.map

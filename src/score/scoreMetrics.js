@@ -153,3 +153,4 @@ function computeAllPeersScoreWeights(peerIdStrs, peerStats, params, peerIPs, top
     return sw;
 }
 exports.computeAllPeersScoreWeights = computeAllPeersScoreWeights;
+//# sourceMappingURL=scoreMetrics.js.map

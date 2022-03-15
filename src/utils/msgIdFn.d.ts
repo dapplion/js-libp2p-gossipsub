@@ -8,3 +8,4 @@ export declare function msgIdFnStrictSign(msg: GossipsubMessage): Uint8Array;
  * Generate a message id, based on message `data`
  */
 export declare function msgIdFnStrictNoSign(msg: GossipsubMessage): Promise<Uint8Array>;
+//# sourceMappingURL=msgIdFn.d.ts.map

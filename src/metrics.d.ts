@@ -320,3 +320,4 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     registerScoreWeights(sw: ScoreWeights<number[]>): void;
 };
 export {};
+//# sourceMappingURL=metrics.d.ts.map

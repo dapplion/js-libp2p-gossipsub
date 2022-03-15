@@ -17,3 +17,4 @@ function createGossipRpc(messages = [], control = {}) {
     };
 }
 exports.createGossipRpc = createGossipRpc;
+//# sourceMappingURL=create-gossip-rpc.js.map

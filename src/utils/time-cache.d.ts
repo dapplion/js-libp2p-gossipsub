@@ -19,3 +19,4 @@ export declare class SimpleTimeCache<T> {
     clear(): void;
 }
 export {};
+//# sourceMappingURL=time-cache.d.ts.map

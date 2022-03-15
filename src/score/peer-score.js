@@ -469,3 +469,4 @@ class PeerScore {
     }
 }
 exports.PeerScore = PeerScore;
+//# sourceMappingURL=peer-score.js.map

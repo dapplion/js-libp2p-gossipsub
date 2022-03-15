@@ -192,3 +192,4 @@ export declare const ACCEPT_FROM_WHITELIST_MAX_MESSAGES = 128;
  * this peer up to this time duration.
  */
 export declare const ACCEPT_FROM_WHITELIST_DURATION_MS = 1000;
+//# sourceMappingURL=constants.d.ts.map

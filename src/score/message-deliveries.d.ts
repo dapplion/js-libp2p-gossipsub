@@ -35,3 +35,4 @@ export declare class MessageDeliveries {
     gc(): void;
     clear(): void;
 }
+//# sourceMappingURL=message-deliveries.d.ts.map
