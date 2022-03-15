@@ -3,14 +3,17 @@ import { expect } from 'chai'
 import PeerId from 'peer-id'
 import delay from 'delay'
 import ConnectionManager from 'libp2p/src/connection-manager'
-import { InMessage } from 'libp2p-interfaces/src/pubsub'
 import { PeerScore, createPeerScoreParams, createTopicScoreParams, TopicScoreParams } from '../ts/score'
 import * as computeScoreModule from '../ts/score/compute-score'
-import { ERR_TOPIC_VALIDATOR_IGNORE, ERR_TOPIC_VALIDATOR_REJECT } from '../ts/constants'
-import { makeTestMessage, getMsgId, getMsgIdStr } from './utils'
+import { getMsgIdStr, makeTestMessage } from './utils'
+import { RejectReason } from '../ts/types'
+import { ScorePenalty } from '../ts/metrics'
 
 const connectionManager = new Map() as unknown as ConnectionManager
 connectionManager.getAll = () => []
+
+/** Placeholder for some ScorePenalty value, only used for metrics */
+const scorePenaltyAny = ScorePenalty.BrokenPromise
 
 describe('PeerScore', () => {
   it('should score based on time in mesh', async () => {
@@ -27,7 +30,7 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
 
     let aScore = ps.score(peerA)
@@ -42,6 +45,7 @@ describe('PeerScore', () => {
     aScore = ps.score(peerA)
     expect(aScore).to.be.gte(((tparams.topicWeight * tparams.timeInMeshWeight) / tparams.timeInMeshQuantum) * elapsed)
   })
+
   it('should cap time in mesh score', async () => {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -55,7 +59,7 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
 
     let aScore = ps.score(peerA)
@@ -71,6 +75,7 @@ describe('PeerScore', () => {
     expect(aScore).to.be.gt(tparams.topicWeight * tparams.timeInMeshWeight * tparams.timeInMeshCap * 0.5)
     expect(aScore).to.be.lt(tparams.topicWeight * tparams.timeInMeshWeight * tparams.timeInMeshCap * 1.5)
   })
+
   it('should score first message deliveries', async () => {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -86,17 +91,16 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
 
     // deliver a bunch of messages from peer A
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
     }
 
     ps._refreshScores()
@@ -105,6 +109,7 @@ describe('PeerScore', () => {
       tparams.topicWeight * tparams.firstMessageDeliveriesWeight * nMessages * tparams.firstMessageDeliveriesDecay
     )
   })
+
   it('should cap first message deliveries score', async () => {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -121,7 +126,7 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
 
     let aScore = ps.score(peerA)
@@ -133,10 +138,9 @@ describe('PeerScore', () => {
     // deliver a bunch of messages from peer A
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
     }
 
     ps._refreshScores()
@@ -148,6 +152,7 @@ describe('PeerScore', () => {
         tparams.firstMessageDeliveriesDecay
     )
   })
+
   it('should decay first message deliveries score', async () => {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -164,7 +169,7 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
 
     let aScore = ps.score(peerA)
@@ -176,10 +181,9 @@ describe('PeerScore', () => {
     // deliver a bunch of messages from peer A
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
     }
 
     ps._refreshScores()
@@ -200,6 +204,7 @@ describe('PeerScore', () => {
     aScore = ps.score(peerA)
     expect(aScore).to.be.equal(expected)
   })
+
   it('should score mesh message deliveries', async function () {
     this.timeout(10000)
     // Create parameters with reasonable default values
@@ -227,7 +232,7 @@ describe('PeerScore', () => {
     const peerC = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     const peers = [peerA, peerB, peerC]
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     peers.forEach((p) => {
       ps.addPeer(p)
       ps.graft(p, mytopic)
@@ -245,18 +250,15 @@ describe('PeerScore', () => {
     // deliver a bunch of messages from peers
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
 
-      msg.receivedFrom = peerB
-      ps.duplicateMessage(msg, getMsgIdStr(msg))
+      ps.duplicateMessage(peerB, getMsgIdStr(msg), msg.topic)
 
       // deliver duplicate from peer C after the window
       await delay(tparams.meshMessageDeliveriesWindow + 5)
-      msg.receivedFrom = peerC
-      ps.duplicateMessage(msg, getMsgIdStr(msg))
+      ps.duplicateMessage(peerC, getMsgIdStr(msg), msg.topic)
     }
     ps._refreshScores()
     const aScore = ps.score(peerA)
@@ -271,6 +273,7 @@ describe('PeerScore', () => {
     const expected = tparams.topicWeight * tparams.meshMessageDeliveriesWeight * penalty
     expect(cScore).to.be.equal(expected)
   })
+
   it('should decay mesh message deliveries score', async function () {
     this.timeout(10000)
     // Create parameters with reasonable default values
@@ -290,7 +293,7 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     // Peer score should start at 0
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
 
@@ -300,10 +303,9 @@ describe('PeerScore', () => {
     // deliver a bunch of messages from peer A
     const nMessages = 40
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
     }
     ps._refreshScores()
     let aScore = ps.score(peerA)
@@ -322,6 +324,7 @@ describe('PeerScore', () => {
     const expected = tparams.topicWeight * tparams.meshMessageDeliveriesWeight * penalty
     expect(aScore).to.be.equal(expected)
   })
+
   it('should score mesh message failures', async function () {
     this.timeout(10000)
     // Create parameters with reasonable default values
@@ -350,7 +353,7 @@ describe('PeerScore', () => {
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     const peerB = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     const peers = [peerA, peerB]
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
 
     peers.forEach((p) => {
       ps.addPeer(p)
@@ -363,10 +366,9 @@ describe('PeerScore', () => {
     // deliver a bunch of messages from peer A. peer B does nothing
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
+      const msg = makeTestMessage(i, mytopic)
       ps.validateMessage(getMsgIdStr(msg))
-      ps.deliverMessage(msg, getMsgIdStr(msg))
+      ps.deliverMessage(peerA, getMsgIdStr(msg), msg.topic)
     }
     // peers A and B should both have zero scores, since the failure penalty hasn't been applied yet
     ps._refreshScores()
@@ -388,6 +390,7 @@ describe('PeerScore', () => {
     const expected = tparams.topicWeight * tparams.meshFailurePenaltyWeight * penalty * tparams.meshFailurePenaltyDecay
     expect(bScore).to.be.equal(expected)
   })
+
   it('should score invalid message deliveries', async function () {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -399,16 +402,15 @@ describe('PeerScore', () => {
       timeInMeshWeight: 0
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
 
     // deliver a bunch of messages from peer A
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
-      await ps.rejectMessage(msg, getMsgIdStr(msg), ERR_TOPIC_VALIDATOR_REJECT)
+      const msg = makeTestMessage(i, mytopic)
+      ps.rejectMessage(peerA, getMsgIdStr(msg), msg.topic, RejectReason.Reject)
     }
     ps._refreshScores()
     let aScore = ps.score(peerA)
@@ -419,6 +421,7 @@ describe('PeerScore', () => {
       (nMessages * tparams.invalidMessageDeliveriesDecay) ** 2
     expect(aScore).to.be.equal(expected)
   })
+
   it('should decay invalid message deliveries score', async function () {
     // Create parameters with reasonable default values
     const mytopic = 'mytopic'
@@ -430,16 +433,15 @@ describe('PeerScore', () => {
       timeInMeshWeight: 0
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
 
     // deliver a bunch of messages from peer A
     const nMessages = 100
     for (let i = 0; i < nMessages; i++) {
-      const msg = makeTestMessage(i, [mytopic])
-      msg.receivedFrom = peerA
-      await ps.rejectMessage(msg, getMsgIdStr(msg), ERR_TOPIC_VALIDATOR_REJECT)
+      const msg = makeTestMessage(i, mytopic)
+      ps.rejectMessage(peerA, getMsgIdStr(msg), msg.topic, RejectReason.Reject)
     }
     ps._refreshScores()
     let aScore = ps.score(peerA)
@@ -458,6 +460,7 @@ describe('PeerScore', () => {
     aScore = ps.score(peerA)
     expect(aScore).to.be.equal(expected)
   })
+
   it('should score invalid/ignored messages', async function () {
     // this test adds coverage for the dark corners of message rejection
     const mytopic = 'mytopic'
@@ -470,20 +473,18 @@ describe('PeerScore', () => {
     }))
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     const peerB = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.addPeer(peerB)
 
-    const msg = makeTestMessage(0, [mytopic])
-    msg.receivedFrom = peerA
+    const msg = makeTestMessage(0, mytopic)
 
     // insert a record
-    await ps.validateMessage(getMsgIdStr(msg))
+    ps.validateMessage(getMsgIdStr(msg))
 
     // this should have no effect in the score, and subsequent duplicate messages should have no effect either
-    await ps.rejectMessage(msg, getMsgIdStr(msg), ERR_TOPIC_VALIDATOR_IGNORE)
-    msg.receivedFrom = peerB
-    await ps.duplicateMessage(msg, getMsgIdStr(msg))
+    ps.rejectMessage(peerA, getMsgIdStr(msg), msg.topic, RejectReason.Ignore)
+    ps.duplicateMessage(peerB, getMsgIdStr(msg), msg.topic)
 
     let aScore = ps.score(peerA)
     let bScore = ps.score(peerB)
@@ -497,13 +498,11 @@ describe('PeerScore', () => {
     ps.deliveryRecords.gc()
 
     // insert a new record in the message deliveries
-    msg.receivedFrom = peerA
-    await ps.validateMessage(getMsgIdStr(msg))
+    ps.validateMessage(getMsgIdStr(msg))
 
     // and reject the message to make sure duplicates are also penalized
-    await ps.rejectMessage(msg, getMsgIdStr(msg), ERR_TOPIC_VALIDATOR_REJECT)
-    msg.receivedFrom = peerB
-    await ps.duplicateMessage(msg, getMsgIdStr(msg))
+    ps.rejectMessage(peerA, getMsgIdStr(msg), msg.topic, RejectReason.Reject)
+    ps.duplicateMessage(peerB, getMsgIdStr(msg), msg.topic)
 
     aScore = ps.score(peerA)
     bScore = ps.score(peerB)
@@ -517,14 +516,11 @@ describe('PeerScore', () => {
     ps.deliveryRecords.gc()
 
     // insert a new record in the message deliveries
-    msg.receivedFrom = peerA
-    await ps.validateMessage(getMsgIdStr(msg))
+    ps.validateMessage(getMsgIdStr(msg))
 
     // and reject the message after a duplicate has arrived
-    msg.receivedFrom = peerB
-    await ps.duplicateMessage(msg, getMsgIdStr(msg))
-    msg.receivedFrom = peerA
-    await ps.rejectMessage(msg, getMsgIdStr(msg), ERR_TOPIC_VALIDATOR_REJECT)
+    ps.duplicateMessage(peerB, getMsgIdStr(msg), msg.topic)
+    ps.rejectMessage(peerA, getMsgIdStr(msg), msg.topic, RejectReason.Reject)
 
     aScore = ps.score(peerA)
     bScore = ps.score(peerB)
@@ -532,6 +528,7 @@ describe('PeerScore', () => {
     expect(aScore).to.equal(expected)
     expect(bScore).to.equal(expected)
   })
+
   it('should score w/ application score', async function () {
     const mytopic = 'mytopic'
     let appScoreValue = 0
@@ -540,7 +537,7 @@ describe('PeerScore', () => {
       appSpecificWeight: 0.5
     })
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
 
@@ -552,6 +549,7 @@ describe('PeerScore', () => {
       expect(aScore).to.equal(expected)
     }
   })
+
   it('should score w/ IP colocation', async function () {
     const mytopic = 'mytopic'
     const params = createPeerScoreParams({
@@ -564,7 +562,7 @@ describe('PeerScore', () => {
     const peerD = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
     const peers = [peerA, peerB, peerC, peerD]
 
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     peers.forEach((p) => {
       ps.addPeer(p)
       ps.graft(p, mytopic)
@@ -597,6 +595,7 @@ describe('PeerScore', () => {
     expect(cScore).to.equal(expected)
     expect(dScore).to.equal(expected)
   })
+
   it('should score w/ behavior penalty', async function () {
     const params = createPeerScoreParams({
       behaviourPenaltyWeight: -1,
@@ -604,10 +603,10 @@ describe('PeerScore', () => {
     })
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
 
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
 
     // add penalty on a non-existent peer
-    ps.addPenalty(peerA, 1)
+    ps.addPenalty(peerA, 1, ScorePenalty.MessageDeficit)
     let aScore = ps.score(peerA)
     expect(aScore).to.equal(0)
 
@@ -617,11 +616,11 @@ describe('PeerScore', () => {
     aScore = ps.score(peerA)
     expect(aScore).to.equal(0)
 
-    ps.addPenalty(peerA, 1)
+    ps.addPenalty(peerA, 1, scorePenaltyAny)
     aScore = ps.score(peerA)
     expect(aScore).to.equal(-1)
 
-    ps.addPenalty(peerA, 1)
+    ps.addPenalty(peerA, 1, scorePenaltyAny)
     aScore = ps.score(peerA)
     expect(aScore).to.equal(-4)
 
@@ -630,6 +629,7 @@ describe('PeerScore', () => {
     aScore = ps.score(peerA)
     expect(aScore).to.equal(-3.9204)
   })
+
   it('should handle score retention', async function () {
     const mytopic = 'mytopic'
     const params = createPeerScoreParams({
@@ -639,7 +639,7 @@ describe('PeerScore', () => {
     })
     const peerA = (await PeerId.create({ keyType: 'secp256k1' })).toB58String()
 
-    const ps = new PeerScore(params, connectionManager)
+    const ps = new PeerScore(params, connectionManager, null)
     ps.addPeer(peerA)
     ps.graft(peerA, mytopic)
     // score should equal -1000 (app-specific score)
@@ -676,7 +676,7 @@ describe('PeerScore score cache', function () {
     decayInterval: 1000,
     topics: { a: { topicWeight: 10 } as TopicScoreParams }
   })
-  const ps2 = new PeerScore(params, connectionManager)
+  const ps2 = new PeerScore(params, connectionManager, null)
 
   beforeEach(() => {
     sandbox = sinon.createSandbox()
@@ -700,19 +700,15 @@ describe('PeerScore score cache', function () {
     expect(computeStoreStub.calledOnce).to.be.true
   })
 
-  function toInMessage(topic: string): InMessage {
-    return { receivedFrom: '', data: new Uint8Array(0), topicIDs: [topic] }
-  }
-
   const testCases = [
     { name: 'decayInterval timeout', fun: () => sandbox.clock.tick(params.decayInterval) },
     { name: '_refreshScores', fun: () => ps2._refreshScores() },
-    { name: 'addPenalty', fun: () => ps2.addPenalty(peerA, 10) },
+    { name: 'addPenalty', fun: () => ps2.addPenalty(peerA, 10, scorePenaltyAny) },
     { name: 'graft', fun: () => ps2.graft(peerA, 'a') },
     { name: 'prune', fun: () => ps2.prune(peerA, 'a') },
-    { name: '_markInvalidMessageDelivery', fun: () => ps2._markInvalidMessageDelivery(peerA, toInMessage('a')) },
-    { name: '_markFirstMessageDelivery', fun: () => ps2._markFirstMessageDelivery(peerA, toInMessage('a')) },
-    { name: '_markDuplicateMessageDelivery', fun: () => ps2._markDuplicateMessageDelivery(peerA, toInMessage('a')) },
+    { name: '_markInvalidMessageDelivery', fun: () => ps2._markInvalidMessageDelivery(peerA, 'a') },
+    { name: '_markFirstMessageDelivery', fun: () => ps2._markFirstMessageDelivery(peerA, 'a') },
+    { name: '_markDuplicateMessageDelivery', fun: () => ps2._markDuplicateMessageDelivery(peerA, 'a') },
     { name: '_setIPs', fun: () => ps2._setIPs(peerA, [], ['127.0.0.1']) },
     { name: '_removeIPs', fun: () => ps2._removeIPs(peerA, ['127.0.0.1']) },
     { name: '_updateIPs', fun: () => ps2._updateIPs() }
