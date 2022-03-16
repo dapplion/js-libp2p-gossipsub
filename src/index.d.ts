@@ -203,6 +203,10 @@ export default class Gossipsub extends EventEmitter {
     private removePeer;
     get started(): boolean;
     /**
+     * Get a the peer-ids in a topic mesh
+     */
+    getMeshPeers(topic: TopicStr): PeerIdStr[];
+    /**
      * Get a list of the peer-ids that are subscribed to one topic.
      */
     getSubscribers(topic: TopicStr): PeerIdStr[];

@@ -428,14 +428,18 @@ class Gossipsub extends libp2p_1.EventEmitter {
         return this.status.code === GossipStatusCode.started;
     }
     /**
+     * Get a the peer-ids in a topic mesh
+     */
+    getMeshPeers(topic) {
+        const peersInTopic = this.mesh.get(topic);
+        return peersInTopic ? Array.from(peersInTopic) : [];
+    }
+    /**
      * Get a list of the peer-ids that are subscribed to one topic.
      */
     getSubscribers(topic) {
         const peersInTopic = this.topics.get(topic);
-        if (!peersInTopic) {
-            return [];
-        }
-        return Array.from(peersInTopic);
+        return peersInTopic ? Array.from(peersInTopic) : [];
     }
     /**
      * Get the list of topics which the peer is subscribed to.
