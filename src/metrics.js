@@ -284,8 +284,8 @@ function getMetrics(register, topicStrToLabel, opts) {
             labelNames: ['reason']
         }),
         /** Total received IHAVE messages by topic */
-        ihaveRcv: register.gauge({
-            name: 'gossipsub_ihave_rcv_total',
+        ihaveRcvMsgids: register.gauge({
+            name: 'gossipsub_ihave_rcv_msgids_total',
             help: 'Total received IHAVE messages by topic',
             labelNames: ['topic']
         }),
@@ -293,20 +293,20 @@ function getMetrics(register, topicStrToLabel, opts) {
          *  The number of times we have decided that an IWANT control message is required for this
          *  topic. A very high metric might indicate an underperforming network.
          *  = rust-libp2p `topic_iwant_msgs` */
-        ihaveRcvNotSeenMsg: register.gauge({
-            name: 'gossipsub_ihave_rcv_not_seen_msg_total',
+        ihaveRcvNotSeenMsgids: register.gauge({
+            name: 'gossipsub_ihave_rcv_not_seen_msgids_total',
             help: 'Total messages per topic we do not have, not actual requests',
             labelNames: ['topic']
         }),
         /** Total received IWANT messages by topic */
-        iwantRcv: register.gauge({
-            name: 'gossipsub_iwant_rcv_total',
+        iwantRcvMsgids: register.gauge({
+            name: 'gossipsub_iwant_rcv_msgids_total',
             help: 'Total received IWANT messages by topic',
             labelNames: ['topic']
         }),
         /** Total requested messageIDs that we don't have */
-        iwantRcvDonthave: register.gauge({
-            name: 'gossipsub_iwant_rcv_dont_have_total',
+        iwantRcvDonthaveMsgids: register.gauge({
+            name: 'gossipsub_iwant_rcv_dont_have_msgids_total',
             help: 'Total requested messageIDs that we do not have'
         }),
         iwantPromiseStarted: register.gauge({
@@ -397,15 +397,15 @@ function getMetrics(register, topicStrToLabel, opts) {
         },
         onIhaveRcv(topicStr, ihave, idonthave) {
             const topic = this.toTopic(topicStr);
-            this.ihaveRcv.inc({ topic }, ihave);
-            this.ihaveRcvNotSeenMsg.inc({ topic }, idonthave);
+            this.ihaveRcvMsgids.inc({ topic }, ihave);
+            this.ihaveRcvNotSeenMsgids.inc({ topic }, idonthave);
         },
         onIwantRcv(iwantByTopic, iwantDonthave) {
             for (const [topicStr, iwant] of iwantByTopic) {
                 const topic = this.toTopic(topicStr);
-                this.iwantRcv.inc({ topic }, iwant);
+                this.iwantRcvMsgids.inc({ topic }, iwant);
             }
-            this.iwantRcvDonthave.inc(iwantDonthave);
+            this.iwantRcvDonthaveMsgids.inc(iwantDonthave);
         },
         onForwardMsg(topicStr, tosendCount) {
             const topic = this.toTopic(topicStr);
@@ -494,8 +494,6 @@ function getMetrics(register, topicStrToLabel, opts) {
             this.peersByScoreThreshold.set({ threshold: ScoreThreshold.mesh }, mesh);
             // Register full score too
             this.score.set(scores);
-            // TODO: Register scores per mesh
-            this.scorePerMesh.set();
         },
         registerScoreWeights(sw) {
             for (const [topic, wsTopic] of sw.byTopic) {

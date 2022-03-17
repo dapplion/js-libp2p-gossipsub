@@ -267,22 +267,22 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
         reason: IHaveIgnoreReason;
     }>;
     /** Total received IHAVE messages by topic */
-    ihaveRcv: Gauge<{
+    ihaveRcvMsgids: Gauge<{
         topic: TopicLabel;
     }>;
     /** Total messages per topic we don't have. Not actual requests.
      *  The number of times we have decided that an IWANT control message is required for this
      *  topic. A very high metric might indicate an underperforming network.
      *  = rust-libp2p `topic_iwant_msgs` */
-    ihaveRcvNotSeenMsg: Gauge<{
+    ihaveRcvNotSeenMsgids: Gauge<{
         topic: TopicLabel;
     }>;
     /** Total received IWANT messages by topic */
-    iwantRcv: Gauge<{
+    iwantRcvMsgids: Gauge<{
         topic: TopicLabel;
     }>;
     /** Total requested messageIDs that we don't have */
-    iwantRcvDonthave: Gauge<LabelsGeneric>;
+    iwantRcvDonthaveMsgids: Gauge<LabelsGeneric>;
     iwantPromiseStarted: Gauge<LabelsGeneric>;
     /** Total count of resolved IWANT promises */
     iwantPromiseResolved: Gauge<LabelsGeneric>;
