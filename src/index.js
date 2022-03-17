@@ -117,14 +117,35 @@ class Gossipsub extends libp2p_1.EventEmitter {
          * This allows us to amortize some resource cleanup -- eg: backoff cleanup
          */
         this.heartbeatTicks = 0;
-        /**
-         * Tracks IHAVE/IWANT promises broken by peers
-         */
-        this.gossipTracer = new tracer_1.IWantTracer();
         this.multicodecs = [constants.GossipsubIDv11, constants.GossipsubIDv10];
         this.directPeerInitial = null;
         this.status = { code: GossipStatusCode.stopped };
         this.heartbeatTimer = null;
+        this.runHeartbeat = () => {
+            const timer = this.metrics?.heartbeatDuration.startTimer();
+            try {
+                this.heartbeat();
+            }
+            catch (e) {
+                this.log('Error running heartbeat', e);
+            }
+            if (timer)
+                timer();
+            // Schedule the next run if still in started status
+            if (this.status.code === GossipStatusCode.started) {
+                // Clear previous timeout before overwriting `status.heartbeatTimeout`, it should be completed tho.
+                clearTimeout(this.status.heartbeatTimeout);
+                // NodeJS setInterval function is innexact, calls drift by a few miliseconds on each call.
+                // To run the heartbeat precisely setTimeout() must be used recomputing the delay on every loop.
+                let msToNextHeartbeat = (Date.now() - this.status.hearbeatStartMs) % this.opts.heartbeatInterval;
+                // If too close to next heartbeat, skip one
+                if (msToNextHeartbeat < this.opts.heartbeatInterval * 0.25) {
+                    msToNextHeartbeat += this.opts.heartbeatInterval;
+                    this.metrics?.heartbeatSkipped.inc();
+                }
+                this.status.heartbeatTimeout = setTimeout(this.runHeartbeat, msToNextHeartbeat);
+            }
+        };
         const opts = {
             gossipIncoming: true,
             fallbackToFloodsub: true,
@@ -190,7 +211,9 @@ class Gossipsub extends libp2p_1.EventEmitter {
             if (!options.metricsTopicStrToLabel) {
                 throw Error('Must set metricsTopicStrToLabel with metrics');
             }
-            const metrics = (0, metrics_1.getMetrics)(options.metricsRegister, options.metricsTopicStrToLabel);
+            const metrics = (0, metrics_1.getMetrics)(options.metricsRegister, options.metricsTopicStrToLabel, {
+                gossipPromiseExpireSec: constants.GossipsubIWantFollowupTime
+            });
             metrics.mcacheSize.addCollect(() => this.onScrapeMetrics(metrics));
             for (const protocol of this.multicodecs) {
                 metrics.protocolsEnabled.set({ protocol }, 1);
@@ -200,6 +223,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
         else {
             this.metrics = null;
         }
+        this.gossipTracer = new tracer_1.IWantTracer(this.metrics);
         /**
          * libp2p
          */
@@ -249,30 +273,17 @@ class Gossipsub extends libp2p_1.EventEmitter {
             }
         });
         const registrarTopologyId = await this.registrar.register(topology);
-        this.log('started');
+        // Schedule to start heartbeat after `GossipsubHeartbeatInitialDelay`
+        const heartbeatTimeout = setTimeout(this.runHeartbeat, constants.GossipsubHeartbeatInitialDelay);
+        // Then, run heartbeat every `heartbeatInterval` offset by `GossipsubHeartbeatInitialDelay`
         this.status = {
             code: GossipStatusCode.started,
             registrarHandlerId: 'TODO',
-            registrarTopologyId
+            registrarTopologyId,
+            heartbeatTimeout: heartbeatTimeout,
+            hearbeatStartMs: Date.now() + constants.GossipsubHeartbeatInitialDelay
         };
-        // Gossipsub
-        if (!this.heartbeatTimer) {
-            const heartbeat = this.heartbeat.bind(this);
-            const timeout = setTimeout(() => {
-                heartbeat();
-                this.heartbeatTimer.runPeriodically(heartbeat, this.opts.heartbeatInterval);
-            }, constants.GossipsubHeartbeatInitialDelay);
-            this.heartbeatTimer = {
-                _intervalId: undefined,
-                runPeriodically: (fn, period) => {
-                    this.heartbeatTimer._intervalId = setInterval(fn, period);
-                },
-                cancel: () => {
-                    clearTimeout(timeout);
-                    clearInterval(this.heartbeatTimer._intervalId);
-                }
-            };
-        }
+        this.log('started');
         this.score.start();
         // connect to direct peers
         this.directPeerInitial = setTimeout(() => {
@@ -377,6 +388,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
         }
         // Add to peer scoring
         this.score.addPeer(peerId.toB58String());
+        this.metrics?.peersPerProtocol.inc({ protocol }, 1);
         // track the connection direction. Don't allow to unset outbound
         if (!this.outbound.get(peerId.toB58String())) {
             this.outbound.set(peerId.toB58String(), direction === 'outbound');
@@ -390,6 +402,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
         const id = peerId.toB58String();
         const peerStreams = this.peers.get(id);
         if (peerStreams != null) {
+            this.metrics?.peersPerProtocol.inc({ protocol: peerStreams.protocol }, -1);
             // delete peer streams. Must delete first to prevent re-entracy loop in .close()
             this.log('delete peer %s', id);
             this.peers.delete(id);
@@ -582,11 +595,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
                 // Tells score that message arrived (but is maybe not fully validated yet).
                 // Consider the message as delivered for gossip promises.
                 this.score.validateMessage(msgIdStr);
-                const promiseStats = this.gossipTracer.deliverMessage(msgIdStr);
-                // This message is (potentially) a response to a promise
-                if (promiseStats) {
-                    this.metrics?.onResolvedPromise(rpcMsg.topic, promiseStats);
-                }
+                this.gossipTracer.deliverMessage(msgIdStr);
                 // Add the message to our memcache
                 this.mcache.put(msgIdStr, rpcMsg);
                 // Dispatch the message to the user if we are subscribed to the topic
@@ -1046,11 +1055,6 @@ class Gossipsub extends libp2p_1.EventEmitter {
      * Maybe reconnect to direct peers
      */
     directConnect() {
-        // we only do this every few ticks to allow pending connections to complete and account for
-        // restarts/downtime
-        if (this.heartbeatTicks % constants.GossipsubDirectConnectTicks !== 0) {
-            return;
-        }
         const toconnect = [];
         this.direct.forEach((id) => {
             const peer = this.peers.get(id);
@@ -1703,7 +1707,14 @@ class Gossipsub extends libp2p_1.EventEmitter {
         // apply IWANT request penalties
         this.applyIwantPenalties();
         // ensure direct peers are connected
-        this.directConnect();
+        if (this.heartbeatTicks % constants.GossipsubDirectConnectTicks === 0) {
+            // we only do this every few ticks to allow pending connections to complete and account for restarts/downtime
+            this.directConnect();
+        }
+        // EXTRA: Prune caches
+        this.fastMsgIdCache?.prune();
+        this.seenCache.prune();
+        this.gossipTracer.prune();
         // maintain the mesh for topics we have joined
         this.mesh.forEach((peers, topic) => {
             // prune/graft helper functions (defined per topic)
@@ -1744,6 +1755,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
             // drop all peers with negative score, without PX
             peers.forEach((id) => {
                 const score = getScore(id);
+                // Record the score
                 if (score < 0) {
                     this.log('HEARTBEAT: Prune peer %s with negative score: score=%d, topic=%s', id, score, topic);
                     prunePeer(id, metrics_1.ChurnReason.BadScore);
@@ -1758,7 +1770,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
                     // filter out mesh peers, direct peers, peers we are backing off, peers with negative score
                     return !peers.has(id) && !this.direct.has(id) && (!backoff || !backoff.has(id)) && getScore(id) >= 0;
                 });
-                peersSet.forEach((p) => graftPeer(p, metrics_1.InclusionReason.Random));
+                peersSet.forEach((p) => graftPeer(p, metrics_1.InclusionReason.NotEnough));
             }
             // do we have to many peers?
             if (peers.size > Dhi) {
@@ -1848,7 +1860,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
                     });
                     peersToGraft.forEach((id) => {
                         this.log('HEARTBEAT: Opportunistically graft peer %s on topic %s', id, topic);
-                        graftPeer(id, metrics_1.InclusionReason.Random);
+                        graftPeer(id, metrics_1.InclusionReason.Opportunistic);
                     });
                 }
             }
@@ -1936,7 +1948,8 @@ class Gossipsub extends libp2p_1.EventEmitter {
         metrics.cacheSize.set({ cache: 'publishedMessageIds' }, this.publishedMessageIds.size);
         metrics.cacheSize.set({ cache: 'mcache' }, this.mcache.size);
         metrics.cacheSize.set({ cache: 'score' }, this.score.size);
-        metrics.cacheSize.set({ cache: 'gossipTracer' }, this.gossipTracer.size);
+        metrics.cacheSize.set({ cache: 'gossipTracer.promises' }, this.gossipTracer.size);
+        metrics.cacheSize.set({ cache: 'gossipTracer.requests' }, this.gossipTracer.requestMsByMsgSize);
         // Bounded by topic
         metrics.cacheSize.set({ cache: 'topics' }, this.topics.size);
         metrics.cacheSize.set({ cache: 'subscriptions' }, this.subscriptions.size);
@@ -1966,13 +1979,17 @@ class Gossipsub extends libp2p_1.EventEmitter {
         }
         // Peer scores
         const scores = [];
+        const scoreByPeer = new Map();
         for (const peerIdStr of this.peers.keys()) {
             const score = this.score.score(peerIdStr);
             scores.push(score);
+            scoreByPeer.set(peerIdStr, score);
         }
         metrics.registerScores(scores, this.opts.scoreThresholds);
+        // Breakdown score per mesh topicLabel
+        metrics.registerScorePerMesh(this.mesh, scoreByPeer);
         // Breakdown on each score weight
-        const sw = (0, scoreMetrics_1.computeAllPeersScoreWeights)(this.peers.keys(), this.score.peerStats, this.score.params, this.score.peerIPs, metrics?.topicStrToLabel);
+        const sw = (0, scoreMetrics_1.computeAllPeersScoreWeights)(this.peers.keys(), this.score.peerStats, this.score.params, this.score.peerIPs, metrics.topicStrToLabel);
         metrics.registerScoreWeights(sw);
     }
 }

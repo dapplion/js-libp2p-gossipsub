@@ -9,14 +9,18 @@ var MessageSource;
 })(MessageSource = exports.MessageSource || (exports.MessageSource = {}));
 var InclusionReason;
 (function (InclusionReason) {
-    /// Peer was a fanaout peer.
+    /** Peer was a fanaout peer. */
     InclusionReason["Fanout"] = "fanout";
-    /// Included from random selection.
+    /** Included from random selection. */
     InclusionReason["Random"] = "random";
-    /// Peer subscribed.
+    /** Peer subscribed. */
     InclusionReason["Subscribed"] = "subscribed";
-    /// Peer was included to fill the outbound quota.
+    /** On heartbeat, peer was included to fill the outbound quota. */
     InclusionReason["Outbound"] = "outbound";
+    /** On heartbeat, not enough peers in mesh */
+    InclusionReason["NotEnough"] = "not_enough";
+    /** On heartbeat opportunistic grafting due to low mesh score */
+    InclusionReason["Opportunistic"] = "opportunistic";
 })(InclusionReason = exports.InclusionReason || (exports.InclusionReason = {}));
 /// Reasons why a peer was removed from the mesh.
 var ChurnReason;
@@ -44,17 +48,6 @@ var ScorePenalty;
     /// Too many peers under one IP address.
     ScorePenalty["IPColocation"] = "IP_colocation";
 })(ScorePenalty = exports.ScorePenalty || (exports.ScorePenalty = {}));
-var PeerKind;
-(function (PeerKind) {
-    /// A gossipsub 1.1 peer.
-    PeerKind["Gossipsubv11"] = "gossipsub_v1.1";
-    /// A gossipsub 1.0 peer.
-    PeerKind["Gossipsub"] = "gossipsub_v1.0";
-    /// A floodsub peer.
-    PeerKind["Floodsub"] = "floodsub";
-    /// The peer doesn't support any of the protocols.
-    PeerKind["NotSupported"] = "not_supported";
-})(PeerKind || (PeerKind = {}));
 var IHaveIgnoreReason;
 (function (IHaveIgnoreReason) {
     IHaveIgnoreReason["LowScore"] = "low_score";
@@ -72,7 +65,7 @@ var ScoreThreshold;
  * A collection of metrics used throughout the Gossipsub behaviour.
  */
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-function getMetrics(register, topicStrToLabel) {
+function getMetrics(register, topicStrToLabel, opts) {
     // Using function style instead of class to prevent having to re-declare all MetricsPrometheus types.
     return {
         /* Metrics for static config */
@@ -121,18 +114,25 @@ function getMetrics(register, topicStrToLabel) {
             labelNames: ['topic', 'reason']
         }),
         /* General Metrics */
-        /// Gossipsub supports floodsub, gossipsub v1.0 and gossipsub v1.1. Peers are classified based
-        /// on which protocol they support. This metric keeps track of the number of peers that are
-        /// connected of each type.
+        /** Gossipsub supports floodsub, gossipsub v1.0 and gossipsub v1.1. Peers are classified based
+         *  on which protocol they support. This metric keeps track of the number of peers that are
+         *  connected of each type. */
         peersPerProtocol: register.gauge({
             name: 'gossipsub_peers_per_protocol_count',
             help: 'Peers connected for each topic',
             labelNames: ['protocol']
         }),
-        /// The time it takes to complete one iteration of the heartbeat.
+        /** The time it takes to complete one iteration of the heartbeat. */
         heartbeatDuration: register.histogram({
-            name: 'gossipsub_heartbeat_duration',
-            help: 'The time it takes to complete one iteration of the heartbeat'
+            name: 'gossipsub_heartbeat_duration_seconds',
+            help: 'The time it takes to complete one iteration of the heartbeat',
+            // Should take <10ms, over 1s it's a huge issue that needs debugging, since a heartbeat will be cancelled
+            buckets: [0.01, 0.1, 1]
+        }),
+        /** Heartbeat run took longer than heartbeat interval so next is skipped */
+        heartbeatSkipped: register.gauge({
+            name: 'gossipsub_heartbeat_skipped',
+            help: 'Heartbeat run took longer than heartbeat interval so next is skipped'
         }),
         /** Message validation results for each topic.
          *  Invalid == Reject?
@@ -190,10 +190,11 @@ function getMetrics(register, topicStrToLabel) {
             labelNames: ['topic']
         }),
         /** Total count of peers (by group) that we publish a msg to */
+        // NOTE: Do not use 'group' label since it's a generic already used by Prometheus to group instances
         msgPublishPeersByGroup: register.gauge({
             name: 'gossipsub_msg_publish_peers_by_group',
             help: 'Total count of peers (by group) that we publish a msg to',
-            labelNames: ['topic', 'group']
+            labelNames: ['topic', 'peerGroup']
         }),
         /** Total count of msg publish data.length bytes */
         msgPublishBytes: register.gauge({
@@ -261,7 +262,7 @@ function getMetrics(register, topicStrToLabel) {
         }),
         /** Histogram of the scores for each mesh topic. */
         // TODO: Not implemented
-        scorePerMesh: register.histogram({
+        scorePerMesh: register.avgMinMax({
             name: 'gossipsub_score_per_mesh',
             help: 'Histogram of the scores for each mesh topic',
             labelNames: ['topic']
@@ -308,23 +309,34 @@ function getMetrics(register, topicStrToLabel) {
             name: 'gossipsub_iwant_rcv_dont_have_total',
             help: 'Total requested messageIDs that we do not have'
         }),
+        iwantPromiseStarted: register.gauge({
+            name: 'gossipsub_iwant_promise_sent_total',
+            help: 'Total count of started IWANT promises'
+        }),
         /** Total count of resolved IWANT promises */
         iwantPromiseResolved: register.gauge({
             name: 'gossipsub_iwant_promise_resolved_total',
-            help: 'Total count of resolved IWANT promises',
-            labelNames: ['topic']
+            help: 'Total count of resolved IWANT promises'
         }),
         /** Total count of peers we have asked IWANT promises that are resolved */
         iwantPromiseResolvedPeers: register.gauge({
             name: 'gossipsub_iwant_promise_resolved_peers',
-            help: 'Total count of peers we have asked IWANT promises that are resolved',
-            labelNames: ['topic']
+            help: 'Total count of peers we have asked IWANT promises that are resolved'
+        }),
+        iwantPromiseBroken: register.gauge({
+            name: 'gossipsub_iwant_promise_broken',
+            help: 'Total count of broken IWANT promises'
         }),
         /** Histogram of delivery time of resolved IWANT promises */
-        iwantPromiseResolvedDeliveryTime: register.histogram({
-            name: 'gossipsub_iwant_promise_resolved_delivery_time',
+        iwantPromiseDeliveryTime: register.histogram({
+            name: 'gossipsub_iwant_promise_delivery_seconds',
             help: 'Histogram of delivery time of resolved IWANT promises',
-            labelNames: ['topic']
+            buckets: [
+                0.5 * opts.gossipPromiseExpireSec,
+                1 * opts.gossipPromiseExpireSec,
+                2 * opts.gossipPromiseExpireSec,
+                4 * opts.gossipPromiseExpireSec
+            ]
         }),
         /* Data structure sizes */
         /** Unbounded cache sizes */
@@ -366,14 +378,6 @@ function getMetrics(register, topicStrToLabel) {
             const topic = this.toTopic(topicStr);
             this.meshPeerChurnEvents.inc({ topic, reason }, count);
         },
-        onResolvedPromise(topicStr, stats) {
-            const topic = this.toTopic(topicStr);
-            this.iwantPromiseResolved.inc({ topic }, 1);
-            this.iwantPromiseResolvedPeers.inc({ topic }, stats.requestedCount);
-            for (const deliverMs of stats.deliversMs) {
-                this.iwantPromiseResolvedDeliveryTime.observe({ topic }, deliverMs);
-            }
-        },
         onReportValidationMcacheHit(hit) {
             this.asyncValidationMcacheHit.inc({ hit: hit ? 'hit' : 'miss' });
         },
@@ -413,10 +417,10 @@ function getMetrics(register, topicStrToLabel) {
             this.msgPublishCount.inc({ topic }, 1);
             this.msgPublishBytes.inc({ topic }, tosendCount * dataLen);
             this.msgPublishPeers.inc({ topic }, tosendCount);
-            this.msgPublishPeersByGroup.inc({ topic, group: 'direct' }, tosendGroupCount.direct);
-            this.msgPublishPeersByGroup.inc({ topic, group: 'floodsub' }, tosendGroupCount.floodsub);
-            this.msgPublishPeersByGroup.inc({ topic, group: 'mesh' }, tosendGroupCount.mesh);
-            this.msgPublishPeersByGroup.inc({ topic, group: 'fanout' }, tosendGroupCount.fanout);
+            this.msgPublishPeersByGroup.inc({ topic, peerGroup: 'direct' }, tosendGroupCount.direct);
+            this.msgPublishPeersByGroup.inc({ topic, peerGroup: 'floodsub' }, tosendGroupCount.floodsub);
+            this.msgPublishPeersByGroup.inc({ topic, peerGroup: 'mesh' }, tosendGroupCount.mesh);
+            this.msgPublishPeersByGroup.inc({ topic, peerGroup: 'fanout' }, tosendGroupCount.fanout);
         },
         onMsgRecvPreValidation(topicStr) {
             const topic = this.toTopic(topicStr);
@@ -491,6 +495,7 @@ function getMetrics(register, topicStrToLabel) {
             // Register full score too
             this.score.set(scores);
             // TODO: Register scores per mesh
+            this.scorePerMesh.set();
         },
         registerScoreWeights(sw) {
             for (const [topic, wsTopic] of sw.byTopic) {
@@ -503,6 +508,26 @@ function getMetrics(register, topicStrToLabel) {
             this.scoreWeights.set({ p: 'p5' }, sw.p5w);
             this.scoreWeights.set({ p: 'p6' }, sw.p6w);
             this.scoreWeights.set({ p: 'p7' }, sw.p7w);
+        },
+        registerScorePerMesh(mesh, scoreByPeer) {
+            const peersPerTopicLabel = new Map();
+            mesh.forEach((peers, topicStr) => {
+                // Aggregate by known topicLabel or throw to 'unknown'. This prevent too high cardinality
+                const topicLabel = this.topicStrToLabel.get(topicStr) ?? 'unknown';
+                let peersInMesh = peersPerTopicLabel.get(topicLabel);
+                if (!peersInMesh) {
+                    peersInMesh = new Set();
+                    peersPerTopicLabel.set(topicLabel, peersInMesh);
+                }
+                peers.forEach((p) => peersInMesh?.add(p));
+            });
+            for (const [topic, peers] of peersPerTopicLabel) {
+                const meshScores = [];
+                peers.forEach((peer) => {
+                    meshScores.push(scoreByPeer.get(peer) ?? 0);
+                });
+                this.scorePerMesh.set({ topic }, meshScores);
+            }
         }
     };
 }

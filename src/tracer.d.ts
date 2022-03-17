@@ -1,5 +1,5 @@
 import { MsgIdStr, PeerIdStr, RejectReason } from './types';
-import { PromiseDeliveredStats } from './metrics';
+import { Metrics } from './metrics';
 /**
  * IWantTracer is an internal tracer that tracks IWANT requests in order to penalize
  * peers who don't follow up on IWANT requests after an IHAVE advertisement.
@@ -9,12 +9,21 @@ import { PromiseDeliveredStats } from './metrics';
  * These 'promises' are merely expectations of a peer's behavior.
  */
 export declare class IWantTracer {
+    private readonly metrics;
     /**
      * Promises to deliver a message
      * Map per message id, per peer, promise expiration time
      */
     private readonly promises;
+    /**
+     * First request time by msgId. Used for metrics to track expire times.
+     * Necessary to know if peers are actually breaking promises or simply sending them a bit later
+     */
+    private readonly requestMsByMsg;
+    private readonly requestMsByMsgExpire;
+    constructor(metrics: Metrics | null);
     get size(): number;
+    get requestMsByMsgSize(): number;
     /**
      * Track a promise to deliver a message from a list of msgIds we are requesting
      */
@@ -28,12 +37,14 @@ export declare class IWantTracer {
     /**
      * Someone delivered a message, stop tracking promises for it
      */
-    deliverMessage(msgIdStr: MsgIdStr): PromiseDeliveredStats | null;
+    deliverMessage(msgIdStr: MsgIdStr): void;
     /**
      * A message got rejected, so we can stop tracking promises and let the score penalty apply from invalid message delivery,
      * unless its an obviously invalid message.
      */
     rejectMessage(msgIdStr: MsgIdStr, reason: RejectReason): void;
     clear(): void;
+    prune(): void;
+    private trackMessage;
 }
 //# sourceMappingURL=tracer.d.ts.map

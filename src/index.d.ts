@@ -145,7 +145,7 @@ export default class Gossipsub extends EventEmitter {
      */
     private readonly publishedMessageIds;
     /**
-     * A message cache that contains the messages for last few hearbeat ticks
+     * A message cache that contains the messages for last few heartbeat ticks
      */
     private readonly mcache;
     /** Peer score tracking */
@@ -367,6 +367,7 @@ export default class Gossipsub extends EventEmitter {
      * Make a PRUNE control message for a peer in a topic
      */
     private makePrune;
+    private runHeartbeat;
     /**
      * Maintains the mesh and fanout maps in gossipsub.
      */

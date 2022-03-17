@@ -7,13 +7,14 @@ function computeScoreWeights(peer, pstats, params, peerIPs, topicStrToLabel) {
     // topic stores
     Object.entries(pstats.topics).forEach(([topic, tstats]) => {
         // the topic parameters
-        const topicType = topicStrToLabel.get(topic);
+        // Aggregate by known topicLabel or throw to 'unknown'. This prevent too high cardinality
+        const topicLabel = topicStrToLabel.get(topic) ?? 'unknown';
         const topicParams = params.topics[topic];
-        if (topicParams === undefined || topicType === undefined) {
+        if (topicParams === undefined) {
             // we are not scoring this topic
             return;
         }
-        let topicScores = byTopic.get(topicType);
+        let topicScores = byTopic.get(topicLabel);
         if (!topicScores) {
             topicScores = {
                 p1w: 0,
@@ -22,7 +23,7 @@ function computeScoreWeights(peer, pstats, params, peerIPs, topicStrToLabel) {
                 p3bw: 0,
                 p4w: 0
             };
-            byTopic.set(topicType, topicScores);
+            byTopic.set(topicLabel, topicScores);
         }
         let p1w = 0;
         let p2w = 0;
@@ -131,6 +132,7 @@ function computeAllPeersScoreWeights(peerIdStrs, peerStats, params, peerIPs, top
                         p3bw: [],
                         p4w: []
                     };
+                    sw.byTopic.set(topic, swTopic);
                 }
                 swTopic.p1w.push(swPeerTopic.p1w);
                 swTopic.p2w.push(swPeerTopic.p2w);

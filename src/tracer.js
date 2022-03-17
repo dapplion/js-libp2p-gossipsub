@@ -13,15 +13,26 @@ const types_1 = require("./types");
  * These 'promises' are merely expectations of a peer's behavior.
  */
 class IWantTracer {
-    constructor() {
+    // eslint-disable-next-line no-useless-constructor
+    constructor(metrics) {
+        this.metrics = metrics;
         /**
          * Promises to deliver a message
          * Map per message id, per peer, promise expiration time
          */
         this.promises = new Map();
+        /**
+         * First request time by msgId. Used for metrics to track expire times.
+         * Necessary to know if peers are actually breaking promises or simply sending them a bit later
+         */
+        this.requestMsByMsg = new Map();
+        this.requestMsByMsgExpire = 10 * constants_1.GossipsubIWantFollowupTime;
     }
     get size() {
         return this.promises.size;
+    }
+    get requestMsByMsgSize() {
+        return this.requestMsByMsg.size;
     }
     /**
      * Track a promise to deliver a message from a list of msgIds we are requesting
@@ -31,14 +42,21 @@ class IWantTracer {
         const ix = Math.floor(Math.random() * msgIds.length);
         const msgId = msgIds[ix];
         const msgIdStr = (0, utils_1.messageIdToString)(msgId);
-        let peers = this.promises.get(msgIdStr);
-        if (!peers) {
-            peers = new Map();
-            this.promises.set(msgIdStr, peers);
+        let expireByPeer = this.promises.get(msgIdStr);
+        if (!expireByPeer) {
+            expireByPeer = new Map();
+            this.promises.set(msgIdStr, expireByPeer);
         }
+        const now = Date.now();
         // If a promise for this message id and peer already exists we don't update the expiry
-        if (!peers.has(from)) {
-            peers.set(from, Date.now() + constants_1.GossipsubIWantFollowupTime);
+        if (!expireByPeer.has(from)) {
+            expireByPeer.set(from, now + constants_1.GossipsubIWantFollowupTime);
+            if (this.metrics) {
+                this.metrics.iwantPromiseStarted.inc(1);
+                if (!this.requestMsByMsg.has(msgIdStr)) {
+                    this.requestMsByMsg.set(msgIdStr, now);
+                }
+            }
         }
     }
     /**
@@ -49,46 +67,48 @@ class IWantTracer {
     getBrokenPromises() {
         const now = Date.now();
         const result = new Map();
-        this.promises.forEach((peers, msgId) => {
-            peers.forEach((expire, p) => {
+        let brokenPromises = 0;
+        this.promises.forEach((expireByPeer, msgId) => {
+            expireByPeer.forEach((expire, p) => {
                 // the promise has been broken
                 if (expire < now) {
                     // add 1 to result
                     result.set(p, (result.get(p) || 0) + 1);
                     // delete from tracked promises
-                    peers.delete(p);
+                    expireByPeer.delete(p);
+                    // for metrics
+                    brokenPromises++;
                 }
             });
             // clean up empty promises for a msgId
-            if (!peers.size) {
+            if (!expireByPeer.size) {
                 this.promises.delete(msgId);
             }
         });
+        this.metrics?.iwantPromiseBroken.inc(brokenPromises);
         return result;
     }
     /**
      * Someone delivered a message, stop tracking promises for it
      */
     deliverMessage(msgIdStr) {
+        this.trackMessage(msgIdStr);
         const expireByPeer = this.promises.get(msgIdStr);
-        if (!expireByPeer) {
-            return null;
+        // Expired promise, check requestMsByMsg
+        if (expireByPeer) {
+            this.promises.delete(msgIdStr);
+            if (this.metrics) {
+                this.metrics.iwantPromiseResolved.inc(1);
+                this.metrics.iwantPromiseResolvedPeers.inc(expireByPeer.size);
+            }
         }
-        this.promises.delete(msgIdStr);
-        const now = Date.now();
-        const deliversMs = [];
-        for (const expire of expireByPeer.values()) {
-            // time_requested = expire - GossipsubIWantFollowupTime
-            // time_elapsed = now - time_requested
-            deliversMs.push(now - expire - constants_1.GossipsubIWantFollowupTime);
-        }
-        return { requestedCount: expireByPeer.size, deliversMs };
     }
     /**
      * A message got rejected, so we can stop tracking promises and let the score penalty apply from invalid message delivery,
      * unless its an obviously invalid message.
      */
     rejectMessage(msgIdStr, reason) {
+        this.trackMessage(msgIdStr);
         // A message got rejected, so we can stop tracking promises and let the score penalty apply.
         // With the expection of obvious invalid messages
         switch (reason) {
@@ -99,6 +119,27 @@ class IWantTracer {
     }
     clear() {
         this.promises.clear();
+    }
+    prune() {
+        const maxMs = Date.now() - this.requestMsByMsgExpire;
+        for (const [k, v] of this.requestMsByMsg.entries()) {
+            if (v < maxMs) {
+                this.requestMsByMsg.delete(k);
+            }
+            else {
+                // sort by insertion order
+                break;
+            }
+        }
+    }
+    trackMessage(msgIdStr) {
+        if (this.metrics) {
+            const requestMs = this.requestMsByMsg.get(msgIdStr);
+            if (requestMs !== undefined) {
+                this.metrics.iwantPromiseDeliveryTime.observe((Date.now() - requestMs) / 1000);
+                this.requestMsByMsg.delete(msgIdStr);
+            }
+        }
     }
 }
 exports.IWantTracer = IWantTracer;

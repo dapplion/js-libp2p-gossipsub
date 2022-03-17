@@ -7,10 +7,9 @@ declare type SimpleTimeCacheOpts = {
  * This gives 4x - 5x performance gain compared to npm TimeCache
  */
 export declare class SimpleTimeCache<T> {
-    private entries;
-    private validityMs;
-    private lastPruneTime;
-    constructor(options: SimpleTimeCacheOpts);
+    private readonly entries;
+    private readonly validityMs;
+    constructor(opts: SimpleTimeCacheOpts);
     get size(): number;
     put(key: string, value: T): void;
     prune(): void;

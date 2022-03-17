@@ -1,6 +1,6 @@
 import { IRPC } from './message/rpc';
 import { PeerScoreThresholds } from './score/peer-score-thresholds';
-import { MessageAcceptance, MessageStatus, RejectReason, RejectReasonObj, TopicStr, ValidateError } from './types';
+import { MessageAcceptance, MessageStatus, PeerIdStr, RejectReason, RejectReasonObj, TopicStr, ValidateError } from './types';
 /** Topic label as provided in `topicStrToLabel` */
 export declare type TopicLabel = string;
 export declare type TopicStrToLabel = Map<TopicStr, TopicLabel>;
@@ -48,10 +48,18 @@ export interface MetricsRegister {
     avgMinMax<T extends LabelsGeneric>(config: AvgMinMaxConfig<T>): AvgMinMax<T>;
 }
 export declare enum InclusionReason {
+    /** Peer was a fanaout peer. */
     Fanout = "fanout",
+    /** Included from random selection. */
     Random = "random",
+    /** Peer subscribed. */
     Subscribed = "subscribed",
-    Outbound = "outbound"
+    /** On heartbeat, peer was included to fill the outbound quota. */
+    Outbound = "outbound",
+    /** On heartbeat, not enough peers in mesh */
+    NotEnough = "not_enough",
+    /** On heartbeat opportunistic grafting due to low mesh score */
+    Opportunistic = "opportunistic"
 }
 export declare enum ChurnReason {
     Dc = "disconnected",
@@ -65,12 +73,6 @@ export declare enum ScorePenalty {
     BrokenPromise = "broken_promise",
     MessageDeficit = "message_deficit",
     IPColocation = "IP_colocation"
-}
-declare enum PeerKind {
-    Gossipsubv11 = "gossipsub_v1.1",
-    Gossipsub = "gossipsub_v1.0",
-    Floodsub = "floodsub",
-    NotSupported = "not_supported"
 }
 export declare enum IHaveIgnoreReason {
     LowScore = "low_score",
@@ -95,8 +97,12 @@ export declare type ToAddGroupCount = {
     random: number;
 };
 export declare type PromiseDeliveredStats = {
+    expired: false;
     requestedCount: number;
-    deliversMs: number[];
+    maxDeliverMs: number;
+} | {
+    expired: true;
+    maxDeliverMs: number;
 };
 export declare type TopicScoreWeights<T> = {
     p1w: T;
@@ -116,7 +122,9 @@ export declare type Metrics = ReturnType<typeof getMetrics>;
 /**
  * A collection of metrics used throughout the Gossipsub behaviour.
  */
-export declare function getMetrics(register: MetricsRegister, topicStrToLabel: TopicStrToLabel): {
+export declare function getMetrics(register: MetricsRegister, topicStrToLabel: TopicStrToLabel, opts: {
+    gossipPromiseExpireSec: number;
+}): {
     protocolsEnabled: Gauge<{
         protocol: string;
     }>;
@@ -149,10 +157,16 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
         topic: TopicLabel;
         reason: ChurnReason;
     }>;
+    /** Gossipsub supports floodsub, gossipsub v1.0 and gossipsub v1.1. Peers are classified based
+     *  on which protocol they support. This metric keeps track of the number of peers that are
+     *  connected of each type. */
     peersPerProtocol: Gauge<{
-        protocol: PeerKind;
+        protocol: string;
     }>;
+    /** The time it takes to complete one iteration of the heartbeat. */
     heartbeatDuration: Histogram<LabelsGeneric>;
+    /** Heartbeat run took longer than heartbeat interval so next is skipped */
+    heartbeatSkipped: Gauge<LabelsGeneric>;
     /** Message validation results for each topic.
      *  Invalid == Reject?
      *  = rust-libp2p `invalid_messages`, `accepted_messages`, `ignored_messages`, `rejected_messages` */
@@ -198,7 +212,7 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     /** Total count of peers (by group) that we publish a msg to */
     msgPublishPeersByGroup: Gauge<{
         topic: TopicLabel;
-        group: keyof ToSendGroupCount;
+        peerGroup: keyof ToSendGroupCount;
     }>;
     /** Total count of msg publish data.length bytes */
     msgPublishBytes: Gauge<{
@@ -241,7 +255,7 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
         p: string;
     }>;
     /** Histogram of the scores for each mesh topic. */
-    scorePerMesh: Histogram<{
+    scorePerMesh: AvgMinMax<{
         topic: TopicLabel;
     }>;
     /** A counter of the kind of penalties being applied to peers. */
@@ -269,18 +283,14 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     }>;
     /** Total requested messageIDs that we don't have */
     iwantRcvDonthave: Gauge<LabelsGeneric>;
+    iwantPromiseStarted: Gauge<LabelsGeneric>;
     /** Total count of resolved IWANT promises */
-    iwantPromiseResolved: Gauge<{
-        topic: TopicLabel;
-    }>;
+    iwantPromiseResolved: Gauge<LabelsGeneric>;
     /** Total count of peers we have asked IWANT promises that are resolved */
-    iwantPromiseResolvedPeers: Gauge<{
-        topic: TopicLabel;
-    }>;
+    iwantPromiseResolvedPeers: Gauge<LabelsGeneric>;
+    iwantPromiseBroken: Gauge<LabelsGeneric>;
     /** Histogram of delivery time of resolved IWANT promises */
-    iwantPromiseResolvedDeliveryTime: Histogram<{
-        topic: TopicLabel;
-    }>;
+    iwantPromiseDeliveryTime: Histogram<LabelsGeneric>;
     /** Unbounded cache sizes */
     cacheSize: Gauge<{
         cache: string;
@@ -297,7 +307,6 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     onAddToMesh(topicStr: TopicStr, reason: InclusionReason, count: number): void;
     /** Register the removal of peers in our mesh due to some reason */
     onRemoveFromMesh(topicStr: TopicStr, reason: ChurnReason, count: number): void;
-    onResolvedPromise(topicStr: string, stats: PromiseDeliveredStats): void;
     onReportValidationMcacheHit(hit: boolean): void;
     onReportValidation(topicStr: TopicStr, acceptance: MessageAcceptance): void;
     /**
@@ -318,6 +327,7 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     onRpcSent(rpc: IRPC, rpcBytes: number): void;
     registerScores(scores: number[], scoreThresholds: PeerScoreThresholds): void;
     registerScoreWeights(sw: ScoreWeights<number[]>): void;
+    registerScorePerMesh(mesh: Map<TopicStr, Set<PeerIdStr>>, scoreByPeer: Map<PeerIdStr, number>): void;
 };
 export {};
 //# sourceMappingURL=metrics.d.ts.map

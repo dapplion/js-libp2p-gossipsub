@@ -7,10 +7,9 @@ exports.SimpleTimeCache = void 0;
  * This gives 4x - 5x performance gain compared to npm TimeCache
  */
 class SimpleTimeCache {
-    constructor(options) {
+    constructor(opts) {
         this.entries = new Map();
-        this.lastPruneTime = 0;
-        this.validityMs = options.validityMs;
+        this.validityMs = opts.validityMs;
         // allow negative validityMs so that this does not cache anything, spec test compliance.spec.js
         // sends duplicate messages and expect peer to receive all. Application likely uses positive validityMs
     }
@@ -19,14 +18,9 @@ class SimpleTimeCache {
     }
     put(key, value) {
         this.entries.set(key, { value, validUntilMs: Date.now() + this.validityMs });
-        this.prune();
     }
     prune() {
         const now = Date.now();
-        if (now - this.lastPruneTime < 200) {
-            return;
-        }
-        this.lastPruneTime = now;
         for (const [k, v] of this.entries.entries()) {
             if (v.validUntilMs < now) {
                 this.entries.delete(k);
@@ -45,8 +39,7 @@ class SimpleTimeCache {
         return value && value.validUntilMs >= Date.now() ? value.value : undefined;
     }
     clear() {
-        this.entries = new Map();
-        this.lastPruneTime = 0;
+        this.entries.clear();
     }
 }
 exports.SimpleTimeCache = SimpleTimeCache;
