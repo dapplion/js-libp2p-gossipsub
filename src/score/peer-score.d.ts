@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { PeerScoreParams } from './peer-score-params';
-import { PeerStats } from './peer-stats';
+import { IPeerStats, PeerStats } from './peer-stats';
 import { MessageDeliveries } from './message-deliveries';
 import ConnectionManager from 'libp2p/src/connection-manager';
 import { MsgIdStr, PeerIdStr, RejectReason, TopicStr } from '../types';
@@ -17,6 +17,7 @@ interface ScoreCacheEntry {
     /** Unix timestamp in miliseconds, the time after which the cached score for a peer is no longer valid */
     cacheUntil: number;
 }
+export declare type PeerScoreStatsDump = Record<PeerIdStr, IPeerStats>;
 export declare class PeerScore {
     readonly params: PeerScoreParams;
     private readonly connectionManager;
@@ -53,6 +54,7 @@ export declare class PeerScore {
      * Periodic maintenance
      */
     background(): void;
+    dumpPeerScoreStats(): PeerScoreStatsDump;
     /**
      * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
      */
@@ -67,7 +69,9 @@ export declare class PeerScore {
     addPenalty(id: PeerIdStr, penalty: number, penaltyLabel: ScorePenalty): void;
     addPeer(id: PeerIdStr): void;
     removePeer(id: PeerIdStr): void;
+    /** Handles scoring functionality as a peer GRAFTs to a topic. */
     graft(id: PeerIdStr, topic: TopicStr): void;
+    /** Handles scoring functionality as a peer PRUNEs from a topic. */
     prune(id: PeerIdStr, topic: TopicStr): void;
     validateMessage(msgIdStr: MsgIdStr): void;
     deliverMessage(from: PeerIdStr, msgIdStr: MsgIdStr, topic: TopicStr): void;
@@ -80,12 +84,13 @@ export declare class PeerScore {
     /**
      * Increments the "invalid message deliveries" counter for all scored topics the message is published in.
      */
-    _markInvalidMessageDelivery(from: PeerIdStr, topic: TopicStr): void;
+    private markInvalidMessageDelivery;
     /**
      * Increments the "first message deliveries" counter for all scored topics the message is published in,
      * as well as the "mesh message deliveries" counter, if the peer is in the mesh for the topic.
+     * Messages already known (with the seenCache) are counted with markDuplicateMessageDelivery()
      */
-    _markFirstMessageDelivery(from: PeerIdStr, topic: TopicStr): void;
+    private markFirstMessageDelivery;
     /**
      * Increments the "mesh message deliveries" counter for messages we've seen before,
      * as long the message was received within the P3 window.

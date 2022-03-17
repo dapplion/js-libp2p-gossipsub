@@ -3,7 +3,7 @@ import Libp2p, { Connection, EventEmitter } from 'libp2p';
 import PeerId from 'peer-id';
 import { MessageCache } from './message-cache';
 import { RPC, IRPC } from './message/rpc';
-import { PeerScoreParams, PeerScoreThresholds } from './score';
+import { PeerScoreParams, PeerScoreThresholds, PeerScoreStatsDump } from './score';
 import { IWantTracer } from './tracer';
 import { MetricsRegister, TopicStrToLabel } from './metrics';
 import { GossipsubMessage, MessageAcceptance, MsgIdFn, SignaturePolicy, TopicStr, MsgIdStr, PeerIdStr, MessageStatus, RejectReasonObj, FastMsgIdFn, AddrInfo, DataTransform } from './types';
@@ -181,6 +181,8 @@ export default class Gossipsub extends EventEmitter {
      * Unmounts the gossipsub protocol and shuts down every connection
      */
     stop(): Promise<void>;
+    /** FOR DEBUG ONLY - Dump peer stats for all peers. Data is cloned, safe to mutate */
+    dumpPeerScoreStats(): PeerScoreStatsDump;
     /**
      * On an inbound stream opened
      */

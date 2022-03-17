@@ -73,6 +73,18 @@ class PeerScore {
         this.updateIPs();
         this.deliveryRecords.gc();
     }
+    dumpPeerScoreStats() {
+        return Object.fromEntries(Array.from(this.peerStats.entries()).map(([peer, stats]) => [
+            peer,
+            {
+                connected: stats.connected,
+                expire: stats.expire,
+                behaviourPenalty: stats.behaviourPenalty,
+                ips: stats.ips.slice(0),
+                topics: Object.fromEntries(Array.from(stats.topics.entries()).map(([topic, tstats]) => [topic, { ...tstats }]))
+            }
+        ]));
+    }
     /**
      * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
      */
@@ -175,9 +187,7 @@ class PeerScore {
     addPeer(id) {
         // create peer stats (not including topic stats for each topic to be scored)
         // topic stats will be added as needed
-        const pstats = (0, peer_stats_1.createPeerStats)({
-            connected: true
-        });
+        const pstats = new peer_stats_1.PeerStats(this.params, true);
         this.peerStats.set(id, pstats);
         // get + update peer IPs
         const ips = this.getIPs(id);
@@ -210,44 +220,44 @@ class PeerScore {
         pstats.connected = false;
         pstats.expire = Date.now() + this.params.retainScore;
     }
+    /** Handles scoring functionality as a peer GRAFTs to a topic. */
     graft(id, topic) {
         const pstats = this.peerStats.get(id);
-        if (!pstats) {
-            return;
+        if (pstats) {
+            const tstats = pstats.topicStats(topic);
+            if (tstats) {
+                // if we are scoring the topic, update the mesh status.
+                tstats.inMesh = true;
+                tstats.graftTime = Date.now();
+                tstats.meshTime = 0;
+                tstats.meshMessageDeliveriesActive = false;
+            }
         }
-        const tstats = (0, peer_stats_1.ensureTopicStats)(topic, pstats, this.params);
-        if (!tstats) {
-            return;
-        }
-        tstats.inMesh = true;
-        tstats.graftTime = Date.now();
-        tstats.meshTime = 0;
-        tstats.meshMessageDeliveriesActive = false;
     }
+    /** Handles scoring functionality as a peer PRUNEs from a topic. */
     prune(id, topic) {
         const pstats = this.peerStats.get(id);
-        if (!pstats) {
-            return;
+        if (pstats) {
+            const tstats = pstats.topicStats(topic);
+            if (tstats) {
+                // sticky mesh delivery rate failure penalty
+                const threshold = this.params.topics[topic].meshMessageDeliveriesThreshold;
+                if (tstats.meshMessageDeliveriesActive && tstats.meshMessageDeliveries < threshold) {
+                    const deficit = threshold - tstats.meshMessageDeliveries;
+                    tstats.meshFailurePenalty += deficit * deficit;
+                }
+                tstats.meshMessageDeliveriesActive = false;
+                tstats.inMesh = false;
+                // TODO: Consider clearing score cache on important penalties
+                // this.scoreCache.delete(id)
+            }
         }
-        const tstats = (0, peer_stats_1.ensureTopicStats)(topic, pstats, this.params);
-        if (!tstats) {
-            return;
-        }
-        // sticky mesh delivery rate failure penalty
-        const threshold = this.params.topics[topic].meshMessageDeliveriesThreshold;
-        if (tstats.meshMessageDeliveriesActive && tstats.meshMessageDeliveries < threshold) {
-            const deficit = threshold - tstats.meshMessageDeliveries;
-            tstats.meshFailurePenalty += deficit * deficit;
-        }
-        tstats.inMesh = false;
-        // TODO: Consider clearing score cache on important penalties
-        // this.scoreCache.delete(id)
     }
     validateMessage(msgIdStr) {
         this.deliveryRecords.ensureRecord(msgIdStr);
     }
     deliverMessage(from, msgIdStr, topic) {
-        this._markFirstMessageDelivery(from, topic);
+        this.markFirstMessageDelivery(from, topic);
         const drec = this.deliveryRecords.ensureRecord(msgIdStr);
         const now = Date.now();
         // defensive check that this is the first delivery trace -- delivery status should be unknown
@@ -270,13 +280,13 @@ class PeerScore {
      * Similar to `rejectMessage` except does not require the message id or reason for an invalid message.
      */
     rejectInvalidMessage(from, topic) {
-        this._markInvalidMessageDelivery(from, topic);
+        this.markInvalidMessageDelivery(from, topic);
     }
     rejectMessage(from, msgIdStr, topic, reason) {
         switch (reason) {
             // these messages are not tracked, but the peer is penalized as they are invalid
             case types_1.RejectReason.Error:
-                this._markInvalidMessageDelivery(from, topic);
+                this.markInvalidMessageDelivery(from, topic);
                 return;
             // we ignore those messages, so do nothing.
             case types_1.RejectReason.Blacklisted:
@@ -289,18 +299,20 @@ class PeerScore {
             log('unexpected rejection: message from %s was first seen %s ago and has delivery status %d', from, Date.now() - drec.firstSeen, message_deliveries_1.DeliveryRecordStatus[drec.status]);
             return;
         }
-        switch (reason) {
-            case types_1.RejectReason.Ignore:
-                // we were explicitly instructed by the validator to ignore the message but not penalize the peer
-                drec.status = message_deliveries_1.DeliveryRecordStatus.ignored;
-                return;
+        if (reason === types_1.RejectReason.Ignore) {
+            // we were explicitly instructed by the validator to ignore the message but not penalize the peer
+            drec.status = message_deliveries_1.DeliveryRecordStatus.ignored;
+            drec.peers.clear();
+            return;
         }
         // mark the message as invalid and penalize peers that have already forwarded it.
         drec.status = message_deliveries_1.DeliveryRecordStatus.invalid;
-        this._markInvalidMessageDelivery(from, topic);
+        this.markInvalidMessageDelivery(from, topic);
         drec.peers.forEach((p) => {
-            this._markInvalidMessageDelivery(p, topic);
+            this.markInvalidMessageDelivery(p, topic);
         });
+        // release the delivery time tracking map to free some memory early
+        drec.peers.clear();
     }
     duplicateMessage(from, msgIdStr, topic) {
         const drec = this.deliveryRecords.ensureRecord(msgIdStr);
@@ -321,79 +333,66 @@ class PeerScore {
                 break;
             case message_deliveries_1.DeliveryRecordStatus.invalid:
                 // we no longer track delivery time
-                this._markInvalidMessageDelivery(from, topic);
+                this.markInvalidMessageDelivery(from, topic);
+                break;
+            case message_deliveries_1.DeliveryRecordStatus.ignored:
+                // the message was ignored; do nothing (we don't know if it was valid)
                 break;
         }
     }
     /**
      * Increments the "invalid message deliveries" counter for all scored topics the message is published in.
      */
-    _markInvalidMessageDelivery(from, topic) {
+    markInvalidMessageDelivery(from, topic) {
         const pstats = this.peerStats.get(from);
-        if (!pstats) {
-            return;
+        if (pstats) {
+            const tstats = pstats.topicStats(topic);
+            if (tstats) {
+                tstats.invalidMessageDeliveries += 1;
+            }
         }
-        const tstats = (0, peer_stats_1.ensureTopicStats)(topic, pstats, this.params);
-        if (!tstats) {
-            return;
-        }
-        tstats.invalidMessageDeliveries += 1;
     }
     /**
      * Increments the "first message deliveries" counter for all scored topics the message is published in,
      * as well as the "mesh message deliveries" counter, if the peer is in the mesh for the topic.
+     * Messages already known (with the seenCache) are counted with markDuplicateMessageDelivery()
      */
-    _markFirstMessageDelivery(from, topic) {
+    markFirstMessageDelivery(from, topic) {
         const pstats = this.peerStats.get(from);
-        if (!pstats) {
-            return;
-        }
-        const tstats = (0, peer_stats_1.ensureTopicStats)(topic, pstats, this.params);
-        if (!tstats) {
-            return;
-        }
-        let cap = this.params.topics[topic].firstMessageDeliveriesCap;
-        tstats.firstMessageDeliveries += 1;
-        if (tstats.firstMessageDeliveries > cap) {
-            tstats.firstMessageDeliveries = cap;
-        }
-        if (!tstats.inMesh) {
-            return;
-        }
-        cap = this.params.topics[topic].meshMessageDeliveriesCap;
-        tstats.meshMessageDeliveries += 1;
-        if (tstats.meshMessageDeliveries > cap) {
-            tstats.meshMessageDeliveries = cap;
+        if (pstats) {
+            const tstats = pstats.topicStats(topic);
+            if (tstats) {
+                let cap = this.params.topics[topic].firstMessageDeliveriesCap;
+                tstats.firstMessageDeliveries = Math.max(cap, tstats.firstMessageDeliveries + 1);
+                if (tstats.inMesh) {
+                    cap = this.params.topics[topic].meshMessageDeliveriesCap;
+                    tstats.meshMessageDeliveries = Math.max(cap, tstats.meshMessageDeliveries + 1);
+                }
+            }
         }
     }
     /**
      * Increments the "mesh message deliveries" counter for messages we've seen before,
      * as long the message was received within the P3 window.
      */
-    markDuplicateMessageDelivery(from, topic, validatedTime = 0) {
+    markDuplicateMessageDelivery(from, topic, validatedTime) {
         const pstats = this.peerStats.get(from);
-        if (!pstats) {
-            return;
-        }
-        const now = validatedTime ? Date.now() : 0;
-        const tstats = (0, peer_stats_1.ensureTopicStats)(topic, pstats, this.params);
-        if (!tstats) {
-            return;
-        }
-        if (!tstats.inMesh) {
-            return;
-        }
-        const tparams = this.params.topics[topic];
-        // check against the mesh delivery window -- if the validated time is passed as 0, then
-        // the message was received before we finished validation and thus falls within the mesh
-        // delivery window.
-        if (validatedTime && now > validatedTime + tparams.meshMessageDeliveriesWindow) {
-            return;
-        }
-        const cap = tparams.meshMessageDeliveriesCap;
-        tstats.meshMessageDeliveries += 1;
-        if (tstats.meshMessageDeliveries > cap) {
-            tstats.meshMessageDeliveries = cap;
+        if (pstats) {
+            const now = validatedTime !== undefined ? Date.now() : 0;
+            const tstats = pstats.topicStats(topic);
+            if (tstats) {
+                if (tstats.inMesh) {
+                    const tparams = this.params.topics[topic];
+                    // check against the mesh delivery window -- if the validated time is passed as 0, then
+                    // the message was received before we finished validation and thus falls within the mesh
+                    // delivery window.
+                    if (validatedTime && now > validatedTime + tparams.meshMessageDeliveriesWindow) {
+                        return;
+                    }
+                    const cap = tparams.meshMessageDeliveriesCap;
+                    tstats.meshMessageDeliveries = Math.min(cap, tstats.meshMessageDeliveries + 1);
+                }
+            }
         }
     }
     /**

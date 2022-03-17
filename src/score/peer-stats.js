@@ -1,46 +1,37 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ensureTopicStats = exports.createTopicStats = exports.createPeerStats = void 0;
-function createPeerStats(ps = {}) {
-    return {
-        connected: false,
-        expire: 0,
-        ips: [],
-        behaviourPenalty: 0,
-        ...ps,
-        topics: ps.topics
-            ? Object.entries(ps.topics).reduce((topics, [topic, topicStats]) => {
-                topics[topic] = createTopicStats(topicStats);
-                return topics;
-            }, {})
-            : {}
-    };
-}
-exports.createPeerStats = createPeerStats;
-function createTopicStats(ts = {}) {
-    return {
-        inMesh: false,
-        graftTime: 0,
-        meshTime: 0,
-        firstMessageDeliveries: 0,
-        meshMessageDeliveries: 0,
-        meshMessageDeliveriesActive: false,
-        meshFailurePenalty: 0,
-        invalidMessageDeliveries: 0,
-        ...ts
-    };
-}
-exports.createTopicStats = createTopicStats;
-function ensureTopicStats(topic, ps, params) {
-    let ts = ps.topics[topic];
-    if (ts) {
-        return ts;
+exports.PeerStats = void 0;
+class PeerStats {
+    // eslint-disable-next-line no-useless-constructor
+    constructor(params, connected) {
+        this.params = params;
+        this.connected = connected;
     }
-    if (!params.topics[topic]) {
-        return undefined;
+    /**
+     * Returns topic stats if they exist, otherwise if the supplied parameters score the
+     * topic, inserts the default stats and returns a reference to those. If neither apply, returns None.
+     */
+    topicStats(topic) {
+        let topicStats = this.topics.get(topic);
+        if (topicStats) {
+            return topicStats;
+        }
+        if (this.params.topics[topic]) {
+            topicStats = {
+                inMesh: false,
+                graftTime: 0,
+                meshTime: 0,
+                firstMessageDeliveries: 0,
+                meshMessageDeliveries: 0,
+                meshMessageDeliveriesActive: false,
+                meshFailurePenalty: 0,
+                invalidMessageDeliveries: 0
+            };
+            this.topics.set(topic, topicStats);
+            return topicStats;
+        }
+        return null;
     }
-    ps.topics[topic] = ts = createTopicStats();
-    return ts;
 }
-exports.ensureTopicStats = ensureTopicStats;
+exports.PeerStats = PeerStats;
 //# sourceMappingURL=peer-stats.js.map

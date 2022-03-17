@@ -337,6 +337,10 @@ class Gossipsub extends libp2p_1.EventEmitter {
         if (this.directPeerInitial)
             clearTimeout(this.directPeerInitial);
     }
+    /** FOR DEBUG ONLY - Dump peer stats for all peers. Data is cloned, safe to mutate */
+    dumpPeerScoreStats() {
+        return this.score.dumpPeerScoreStats();
+    }
     /**
      * On an inbound stream opened
      */
