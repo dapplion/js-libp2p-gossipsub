@@ -11,9 +11,16 @@ import { Metrics, ScorePenalty } from '../metrics'
 const log = debug('libp2p:gossipsub:score')
 type IPStr = string
 
+type PeerScoreOpts = {
+  /**
+   * Miliseconds to cache computed score per peer
+   */
+  scoreCacheValidityMs: number
+}
+
 interface ScoreCacheEntry {
-  /** The cached score, null if not cached */
-  score: number | null
+  /** The cached score */
+  score: number
   /** Unix timestamp in miliseconds, the time after which the cached score for a peer is no longer valid */
   cacheUntil: number
 }
@@ -22,32 +29,32 @@ export class PeerScore {
   /**
    * Per-peer stats for score calculation
    */
-  readonly peerStats: Map<PeerIdStr, PeerStats>
+  readonly peerStats = new Map<PeerIdStr, PeerStats>()
   /**
    * IP colocation tracking; maps IP => set of peers.
    */
-  readonly peerIPs: Map<PeerIdStr, Set<IPStr>>
+  readonly peerIPs = new Map<PeerIdStr, Set<IPStr>>()
   /**
    * Cache score up to decayInterval if topic stats are unchanged.
    */
-  readonly scoreCache: Map<PeerIdStr, ScoreCacheEntry>
+  readonly scoreCache = new Map<PeerIdStr, ScoreCacheEntry>()
   /**
    * Recent message delivery timing/participants
    */
-  readonly deliveryRecords: MessageDeliveries
+  readonly deliveryRecords = new MessageDeliveries()
+
   _backgroundInterval?: NodeJS.Timeout
+
+  private readonly scoreCacheValidityMs: number
 
   constructor(
     readonly params: PeerScoreParams,
     private readonly connectionManager: ConnectionManager,
-    private readonly metrics: Metrics | null
+    private readonly metrics: Metrics | null,
+    opts: PeerScoreOpts
   ) {
     validatePeerScoreParams(params)
-    this.params = params
-    this.peerStats = new Map()
-    this.peerIPs = new Map()
-    this.scoreCache = new Map()
-    this.deliveryRecords = new MessageDeliveries()
+    this.scoreCacheValidityMs = opts.scoreCacheValidityMs
   }
 
   get size(): number {
@@ -86,15 +93,15 @@ export class PeerScore {
    * Periodic maintenance
    */
   background(): void {
-    this._refreshScores()
-    this._updateIPs()
+    this.refreshScores()
+    this.updateIPs()
     this.deliveryRecords.gc()
   }
 
   /**
    * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
    */
-  _refreshScores(): void {
+  private refreshScores(): void {
     const now = Date.now()
     const decayToZero = this.params.decayToZero
 
@@ -103,8 +110,9 @@ export class PeerScore {
         // has the retention perious expired?
         if (now > pstats.expire) {
           // yes, throw it away (but clean up the IP tracking first)
-          this._removeIPs(id, pstats.ips)
+          this.removeIPs(id, pstats.ips)
           this.peerStats.delete(id)
+          this.scoreCache.delete(id)
         }
 
         // we don't decay retained scores, as the peer is not active.
@@ -152,8 +160,6 @@ export class PeerScore {
       if (pstats.behaviourPenalty < decayToZero) {
         pstats.behaviourPenalty = 0
       }
-
-      this.scoreCache.set(id, { score: null, cacheUntil: 0 })
     })
   }
 
@@ -169,23 +175,27 @@ export class PeerScore {
     }
 
     const now = Date.now()
-    let cacheEntry = this.scoreCache.get(id)
-    if (cacheEntry === undefined) {
-      cacheEntry = { score: null, cacheUntil: 0 }
-      this.scoreCache.set(id, cacheEntry)
-    }
+    const cacheEntry = this.scoreCache.get(id)
 
-    const { score, cacheUntil } = cacheEntry
-    if (cacheUntil > now && score !== null) {
-      return score
+    // Found cached score within validity period
+    if (cacheEntry && cacheEntry.cacheUntil > now) {
+      return cacheEntry.score
     }
 
     this.metrics?.scoreFnRuns.inc()
 
-    cacheEntry.score = computeScore(id, pstats, this.params, this.peerIPs)
-    // decayInterval is used to refresh score so we don't want to cache more than that
-    cacheEntry.cacheUntil = now + this.params.decayInterval
-    return cacheEntry.score
+    const score = computeScore(id, pstats, this.params, this.peerIPs)
+    const cacheUntil = now + this.scoreCacheValidityMs
+
+    if (cacheEntry) {
+      this.metrics?.scoreCachedDelta.observe(Math.abs(score - cacheEntry.score))
+      cacheEntry.score = score
+      cacheEntry.cacheUntil = cacheUntil
+    } else {
+      this.scoreCache.set(id, { score, cacheUntil })
+    }
+
+    return score
   }
 
   /**
@@ -197,7 +207,6 @@ export class PeerScore {
       return
     }
     pstats.behaviourPenalty += penalty
-    this.scoreCache.set(id, { score: null, cacheUntil: 0 })
     this.metrics?.onScorePenalty(penaltyLabel)
   }
 
@@ -210,8 +219,8 @@ export class PeerScore {
     this.peerStats.set(id, pstats)
 
     // get + update peer IPs
-    const ips = this._getIPs(id)
-    this._setIPs(id, ips, pstats.ips)
+    const ips = this.getIPs(id)
+    this.setIPs(id, ips, pstats.ips)
     pstats.ips = ips
   }
 
@@ -224,13 +233,10 @@ export class PeerScore {
     // decide whether to retain the score; this currently only retains non-positive scores
     // to dissuade attacks on the score function.
     if (this.score(id) > 0) {
-      this._removeIPs(id, pstats.ips)
+      this.removeIPs(id, pstats.ips)
       this.peerStats.delete(id)
       return
     }
-
-    // delete score cache
-    this.scoreCache.delete(id)
 
     // furthermore, when we decide to retain the score, the firstMessageDelivery counters are
     // reset to 0 and mesh delivery penalties applied.
@@ -265,7 +271,6 @@ export class PeerScore {
     tstats.graftTime = Date.now()
     tstats.meshTime = 0
     tstats.meshMessageDeliveriesActive = false
-    this.scoreCache.set(id, { score: null, cacheUntil: 0 })
   }
 
   prune(id: PeerIdStr, topic: TopicStr): void {
@@ -286,7 +291,9 @@ export class PeerScore {
       tstats.meshFailurePenalty += deficit * deficit
     }
     tstats.inMesh = false
-    this.scoreCache.set(id, { score: null, cacheUntil: 0 })
+
+    // TODO: Consider clearing score cache on important penalties
+    // this.scoreCache.delete(id)
   }
 
   validateMessage(msgIdStr: MsgIdStr): void {
@@ -317,7 +324,7 @@ export class PeerScore {
       // this check is to make sure a peer can't send us a message twice and get a double count
       // if it is a first delivery.
       if (p !== from) {
-        this._markDuplicateMessageDelivery(p, topic)
+        this.markDuplicateMessageDelivery(p, topic)
       }
     })
   }
@@ -389,7 +396,7 @@ export class PeerScore {
       case DeliveryRecordStatus.valid:
         // mark the peer delivery time to only count a duplicate delivery once.
         drec.peers.add(from)
-        this._markDuplicateMessageDelivery(from, topic, drec.validated)
+        this.markDuplicateMessageDelivery(from, topic, drec.validated)
         break
       case DeliveryRecordStatus.invalid:
         // we no longer track delivery time
@@ -413,8 +420,6 @@ export class PeerScore {
     }
 
     tstats.invalidMessageDeliveries += 1
-
-    this.scoreCache.set(from, { score: null, cacheUntil: 0 })
   }
 
   /**
@@ -447,15 +452,13 @@ export class PeerScore {
     if (tstats.meshMessageDeliveries > cap) {
       tstats.meshMessageDeliveries = cap
     }
-
-    this.scoreCache.set(from, { score: null, cacheUntil: 0 })
   }
 
   /**
    * Increments the "mesh message deliveries" counter for messages we've seen before,
    * as long the message was received within the P3 window.
    */
-  _markDuplicateMessageDelivery(from: PeerIdStr, topic: TopicStr, validatedTime = 0): void {
+  private markDuplicateMessageDelivery(from: PeerIdStr, topic: TopicStr, validatedTime = 0): void {
     const pstats = this.peerStats.get(from)
     if (!pstats) {
       return
@@ -486,14 +489,12 @@ export class PeerScore {
     if (tstats.meshMessageDeliveries > cap) {
       tstats.meshMessageDeliveries = cap
     }
-
-    this.scoreCache.set(from, { score: null, cacheUntil: 0 })
   }
 
   /**
    * Gets the current IPs for a peer.
    */
-  _getIPs(id: PeerIdStr): IPStr[] {
+  private getIPs(id: PeerIdStr): IPStr[] {
     // TODO: Optimize conversions
     const peerId = PeerId.createFromB58String(id)
 
@@ -505,7 +506,7 @@ export class PeerScore {
   /**
    * Adds tracking for the new IPs in the list, and removes tracking from the obsolete IPs.
    */
-  _setIPs(id: PeerIdStr, newIPs: IPStr[], oldIPs: IPStr[]): void {
+  private setIPs(id: PeerIdStr, newIPs: IPStr[], oldIPs: IPStr[]): void {
     // add the new IPs to the tracking
     // eslint-disable-next-line no-labels
     addNewIPs: for (const ip of newIPs) {
@@ -544,14 +545,12 @@ export class PeerScore {
         this.peerIPs.delete(ip)
       }
     }
-
-    this.scoreCache.set(id, { score: null, cacheUntil: 0 })
   }
 
   /**
    * Removes an IP list from the tracking list for a peer.
    */
-  _removeIPs(id: PeerIdStr, ips: IPStr[]): void {
+  private removeIPs(id: PeerIdStr, ips: IPStr[]): void {
     ips.forEach((ip) => {
       const peers = this.peerIPs.get(ip)
       if (!peers) {
@@ -563,19 +562,16 @@ export class PeerScore {
         this.peerIPs.delete(ip)
       }
     })
-
-    this.scoreCache.set(id, { score: null, cacheUntil: 0 })
   }
 
   /**
    * Update all peer IPs to currently open connections
    */
-  _updateIPs(): void {
+  private updateIPs(): void {
     this.peerStats.forEach((pstats, id) => {
-      const newIPs = this._getIPs(id)
-      this._setIPs(id, newIPs, pstats.ips)
+      const newIPs = this.getIPs(id)
+      this.setIPs(id, newIPs, pstats.ips)
       pstats.ips = newIPs
-      this.scoreCache.set(id, { score: null, cacheUntil: 0 })
     })
   }
 }
