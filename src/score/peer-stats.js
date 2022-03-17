@@ -5,6 +5,16 @@ class PeerStats {
     // eslint-disable-next-line no-useless-constructor
     constructor(params, connected) {
         this.params = params;
+        /** true if the peer is currently connected */
+        this.connected = false;
+        /** expiration time of the score stats for disconnected peers */
+        this.expire = 0;
+        /** per topic stats */
+        this.topics = new Map();
+        /** IP tracking; store as string for easy processing */
+        this.ips = [];
+        /** behavioural pattern penalties (applied by the router) */
+        this.behaviourPenalty = 0;
         this.connected = connected;
     }
     /**

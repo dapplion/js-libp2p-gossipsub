@@ -14,7 +14,7 @@ export declare class PeerStats {
     /** expiration time of the score stats for disconnected peers */
     expire: number;
     /** per topic stats */
-    topics: Map<TopicStr, TopicStats>;
+    topics: Map<string, TopicStats>;
     /** IP tracking; store as string for easy processing */
     ips: string[];
     /** behavioural pattern penalties (applied by the router) */
