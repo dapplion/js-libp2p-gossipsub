@@ -244,6 +244,7 @@ export declare function getMetrics(register: MetricsRegister, topicStrToLabel: T
     scoreFnCalls: Gauge<LabelsGeneric>;
     /** Total times score() call actually computed computeScore(), no cache */
     scoreFnRuns: Gauge<LabelsGeneric>;
+    scoreCachedDelta: Histogram<LabelsGeneric>;
     /** Current count of peers by score threshold */
     peersByScoreThreshold: Gauge<{
         threshold: ScoreThreshold;

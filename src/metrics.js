@@ -243,6 +243,10 @@ function getMetrics(register, topicStrToLabel, opts) {
             name: 'gossipsub_score_fn_runs_total',
             help: 'Total times score() call actually computed computeScore(), no cache'
         }),
+        scoreCachedDelta: register.histogram({
+            name: 'gossipsub_score_cache_delta',
+            help: 'Delta of score between cached values that expired'
+        }),
         /** Current count of peers by score threshold */
         peersByScoreThreshold: register.gauge({
             name: 'gossipsub_peers_by_score_threshold_count',

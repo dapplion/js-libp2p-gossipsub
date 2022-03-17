@@ -13,16 +13,28 @@ const debug_1 = __importDefault(require("debug"));
 const types_1 = require("../types");
 const log = (0, debug_1.default)('libp2p:gossipsub:score');
 class PeerScore {
-    constructor(params, connectionManager, metrics) {
+    constructor(params, connectionManager, metrics, opts) {
         this.params = params;
         this.connectionManager = connectionManager;
         this.metrics = metrics;
-        (0, peer_score_params_1.validatePeerScoreParams)(params);
-        this.params = params;
+        /**
+         * Per-peer stats for score calculation
+         */
         this.peerStats = new Map();
+        /**
+         * IP colocation tracking; maps IP => set of peers.
+         */
         this.peerIPs = new Map();
+        /**
+         * Cache score up to decayInterval if topic stats are unchanged.
+         */
         this.scoreCache = new Map();
+        /**
+         * Recent message delivery timing/participants
+         */
         this.deliveryRecords = new message_deliveries_1.MessageDeliveries();
+        (0, peer_score_params_1.validatePeerScoreParams)(params);
+        this.scoreCacheValidityMs = opts.scoreCacheValidityMs;
     }
     get size() {
         return this.peerStats.size;
@@ -57,14 +69,14 @@ class PeerScore {
      * Periodic maintenance
      */
     background() {
-        this._refreshScores();
-        this._updateIPs();
+        this.refreshScores();
+        this.updateIPs();
         this.deliveryRecords.gc();
     }
     /**
      * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
      */
-    _refreshScores() {
+    refreshScores() {
         const now = Date.now();
         const decayToZero = this.params.decayToZero;
         this.peerStats.forEach((pstats, id) => {
@@ -72,8 +84,9 @@ class PeerScore {
                 // has the retention perious expired?
                 if (now > pstats.expire) {
                     // yes, throw it away (but clean up the IP tracking first)
-                    this._removeIPs(id, pstats.ips);
+                    this.removeIPs(id, pstats.ips);
                     this.peerStats.delete(id);
+                    this.scoreCache.delete(id);
                 }
                 // we don't decay retained scores, as the peer is not active.
                 // this way the peer cannot reset a negative score by simply disconnecting and reconnecting,
@@ -118,7 +131,6 @@ class PeerScore {
             if (pstats.behaviourPenalty < decayToZero) {
                 pstats.behaviourPenalty = 0;
             }
-            this.scoreCache.set(id, { score: null, cacheUntil: 0 });
         });
     }
     /**
@@ -131,20 +143,23 @@ class PeerScore {
             return 0;
         }
         const now = Date.now();
-        let cacheEntry = this.scoreCache.get(id);
-        if (cacheEntry === undefined) {
-            cacheEntry = { score: null, cacheUntil: 0 };
-            this.scoreCache.set(id, cacheEntry);
-        }
-        const { score, cacheUntil } = cacheEntry;
-        if (cacheUntil > now && score !== null) {
-            return score;
+        const cacheEntry = this.scoreCache.get(id);
+        // Found cached score within validity period
+        if (cacheEntry && cacheEntry.cacheUntil > now) {
+            return cacheEntry.score;
         }
         this.metrics?.scoreFnRuns.inc();
-        cacheEntry.score = (0, compute_score_1.computeScore)(id, pstats, this.params, this.peerIPs);
-        // decayInterval is used to refresh score so we don't want to cache more than that
-        cacheEntry.cacheUntil = now + this.params.decayInterval;
-        return cacheEntry.score;
+        const score = (0, compute_score_1.computeScore)(id, pstats, this.params, this.peerIPs);
+        const cacheUntil = now + this.scoreCacheValidityMs;
+        if (cacheEntry) {
+            this.metrics?.scoreCachedDelta.observe(Math.abs(score - cacheEntry.score));
+            cacheEntry.score = score;
+            cacheEntry.cacheUntil = cacheUntil;
+        }
+        else {
+            this.scoreCache.set(id, { score, cacheUntil });
+        }
+        return score;
     }
     /**
      * Apply a behavioural penalty to a peer
@@ -155,7 +170,6 @@ class PeerScore {
             return;
         }
         pstats.behaviourPenalty += penalty;
-        this.scoreCache.set(id, { score: null, cacheUntil: 0 });
         this.metrics?.onScorePenalty(penaltyLabel);
     }
     addPeer(id) {
@@ -166,8 +180,8 @@ class PeerScore {
         });
         this.peerStats.set(id, pstats);
         // get + update peer IPs
-        const ips = this._getIPs(id);
-        this._setIPs(id, ips, pstats.ips);
+        const ips = this.getIPs(id);
+        this.setIPs(id, ips, pstats.ips);
         pstats.ips = ips;
     }
     removePeer(id) {
@@ -178,12 +192,10 @@ class PeerScore {
         // decide whether to retain the score; this currently only retains non-positive scores
         // to dissuade attacks on the score function.
         if (this.score(id) > 0) {
-            this._removeIPs(id, pstats.ips);
+            this.removeIPs(id, pstats.ips);
             this.peerStats.delete(id);
             return;
         }
-        // delete score cache
-        this.scoreCache.delete(id);
         // furthermore, when we decide to retain the score, the firstMessageDelivery counters are
         // reset to 0 and mesh delivery penalties applied.
         Object.entries(pstats.topics).forEach(([topic, tstats]) => {
@@ -211,7 +223,6 @@ class PeerScore {
         tstats.graftTime = Date.now();
         tstats.meshTime = 0;
         tstats.meshMessageDeliveriesActive = false;
-        this.scoreCache.set(id, { score: null, cacheUntil: 0 });
     }
     prune(id, topic) {
         const pstats = this.peerStats.get(id);
@@ -229,7 +240,8 @@ class PeerScore {
             tstats.meshFailurePenalty += deficit * deficit;
         }
         tstats.inMesh = false;
-        this.scoreCache.set(id, { score: null, cacheUntil: 0 });
+        // TODO: Consider clearing score cache on important penalties
+        // this.scoreCache.delete(id)
     }
     validateMessage(msgIdStr) {
         this.deliveryRecords.ensureRecord(msgIdStr);
@@ -250,7 +262,7 @@ class PeerScore {
             // this check is to make sure a peer can't send us a message twice and get a double count
             // if it is a first delivery.
             if (p !== from) {
-                this._markDuplicateMessageDelivery(p, topic);
+                this.markDuplicateMessageDelivery(p, topic);
             }
         });
     }
@@ -305,7 +317,7 @@ class PeerScore {
             case message_deliveries_1.DeliveryRecordStatus.valid:
                 // mark the peer delivery time to only count a duplicate delivery once.
                 drec.peers.add(from);
-                this._markDuplicateMessageDelivery(from, topic, drec.validated);
+                this.markDuplicateMessageDelivery(from, topic, drec.validated);
                 break;
             case message_deliveries_1.DeliveryRecordStatus.invalid:
                 // we no longer track delivery time
@@ -326,7 +338,6 @@ class PeerScore {
             return;
         }
         tstats.invalidMessageDeliveries += 1;
-        this.scoreCache.set(from, { score: null, cacheUntil: 0 });
     }
     /**
      * Increments the "first message deliveries" counter for all scored topics the message is published in,
@@ -354,13 +365,12 @@ class PeerScore {
         if (tstats.meshMessageDeliveries > cap) {
             tstats.meshMessageDeliveries = cap;
         }
-        this.scoreCache.set(from, { score: null, cacheUntil: 0 });
     }
     /**
      * Increments the "mesh message deliveries" counter for messages we've seen before,
      * as long the message was received within the P3 window.
      */
-    _markDuplicateMessageDelivery(from, topic, validatedTime = 0) {
+    markDuplicateMessageDelivery(from, topic, validatedTime = 0) {
         const pstats = this.peerStats.get(from);
         if (!pstats) {
             return;
@@ -385,12 +395,11 @@ class PeerScore {
         if (tstats.meshMessageDeliveries > cap) {
             tstats.meshMessageDeliveries = cap;
         }
-        this.scoreCache.set(from, { score: null, cacheUntil: 0 });
     }
     /**
      * Gets the current IPs for a peer.
      */
-    _getIPs(id) {
+    getIPs(id) {
         // TODO: Optimize conversions
         const peerId = peer_id_1.default.createFromB58String(id);
         // PeerId.createFromB58String(id)
@@ -399,7 +408,7 @@ class PeerScore {
     /**
      * Adds tracking for the new IPs in the list, and removes tracking from the obsolete IPs.
      */
-    _setIPs(id, newIPs, oldIPs) {
+    setIPs(id, newIPs, oldIPs) {
         // add the new IPs to the tracking
         // eslint-disable-next-line no-labels
         addNewIPs: for (const ip of newIPs) {
@@ -438,12 +447,11 @@ class PeerScore {
                 this.peerIPs.delete(ip);
             }
         }
-        this.scoreCache.set(id, { score: null, cacheUntil: 0 });
     }
     /**
      * Removes an IP list from the tracking list for a peer.
      */
-    _removeIPs(id, ips) {
+    removeIPs(id, ips) {
         ips.forEach((ip) => {
             const peers = this.peerIPs.get(ip);
             if (!peers) {
@@ -454,17 +462,15 @@ class PeerScore {
                 this.peerIPs.delete(ip);
             }
         });
-        this.scoreCache.set(id, { score: null, cacheUntil: 0 });
     }
     /**
      * Update all peer IPs to currently open connections
      */
-    _updateIPs() {
+    updateIPs() {
         this.peerStats.forEach((pstats, id) => {
-            const newIPs = this._getIPs(id);
-            this._setIPs(id, newIPs, pstats.ips);
+            const newIPs = this.getIPs(id);
+            this.setIPs(id, newIPs, pstats.ips);
             pstats.ips = newIPs;
-            this.scoreCache.set(id, { score: null, cacheUntil: 0 });
         });
     }
 }

@@ -5,10 +5,15 @@ import { MessageDeliveries } from './message-deliveries';
 import ConnectionManager from 'libp2p/src/connection-manager';
 import { MsgIdStr, PeerIdStr, RejectReason, TopicStr } from '../types';
 import { Metrics, ScorePenalty } from '../metrics';
-declare type IPStr = string;
+declare type PeerScoreOpts = {
+    /**
+     * Miliseconds to cache computed score per peer
+     */
+    scoreCacheValidityMs: number;
+};
 interface ScoreCacheEntry {
-    /** The cached score, null if not cached */
-    score: number | null;
+    /** The cached score */
+    score: number;
     /** Unix timestamp in miliseconds, the time after which the cached score for a peer is no longer valid */
     cacheUntil: number;
 }
@@ -19,21 +24,22 @@ export declare class PeerScore {
     /**
      * Per-peer stats for score calculation
      */
-    readonly peerStats: Map<PeerIdStr, PeerStats>;
+    readonly peerStats: Map<string, PeerStats>;
     /**
      * IP colocation tracking; maps IP => set of peers.
      */
-    readonly peerIPs: Map<PeerIdStr, Set<IPStr>>;
+    readonly peerIPs: Map<string, Set<string>>;
     /**
      * Cache score up to decayInterval if topic stats are unchanged.
      */
-    readonly scoreCache: Map<PeerIdStr, ScoreCacheEntry>;
+    readonly scoreCache: Map<string, ScoreCacheEntry>;
     /**
      * Recent message delivery timing/participants
      */
     readonly deliveryRecords: MessageDeliveries;
     _backgroundInterval?: NodeJS.Timeout;
-    constructor(params: PeerScoreParams, connectionManager: ConnectionManager, metrics: Metrics | null);
+    private readonly scoreCacheValidityMs;
+    constructor(params: PeerScoreParams, connectionManager: ConnectionManager, metrics: Metrics | null, opts: PeerScoreOpts);
     get size(): number;
     /**
      * Start PeerScore instance
@@ -50,7 +56,7 @@ export declare class PeerScore {
     /**
      * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
      */
-    _refreshScores(): void;
+    private refreshScores;
     /**
      * Return the score for a peer
      */
@@ -84,23 +90,23 @@ export declare class PeerScore {
      * Increments the "mesh message deliveries" counter for messages we've seen before,
      * as long the message was received within the P3 window.
      */
-    _markDuplicateMessageDelivery(from: PeerIdStr, topic: TopicStr, validatedTime?: number): void;
+    private markDuplicateMessageDelivery;
     /**
      * Gets the current IPs for a peer.
      */
-    _getIPs(id: PeerIdStr): IPStr[];
+    private getIPs;
     /**
      * Adds tracking for the new IPs in the list, and removes tracking from the obsolete IPs.
      */
-    _setIPs(id: PeerIdStr, newIPs: IPStr[], oldIPs: IPStr[]): void;
+    private setIPs;
     /**
      * Removes an IP list from the tracking list for a peer.
      */
-    _removeIPs(id: PeerIdStr, ips: IPStr[]): void;
+    private removeIPs;
     /**
      * Update all peer IPs to currently open connections
      */
-    _updateIPs(): void;
+    private updateIPs;
 }
 export {};
 //# sourceMappingURL=peer-score.d.ts.map

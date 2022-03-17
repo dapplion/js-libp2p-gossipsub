@@ -212,7 +212,7 @@ class Gossipsub extends libp2p_1.EventEmitter {
                 throw Error('Must set metricsTopicStrToLabel with metrics');
             }
             const metrics = (0, metrics_1.getMetrics)(options.metricsRegister, options.metricsTopicStrToLabel, {
-                gossipPromiseExpireSec: constants.GossipsubIWantFollowupTime
+                gossipPromiseExpireSec: constants.GossipsubIWantFollowupTime / 1000
             });
             metrics.mcacheSize.addCollect(() => this.onScrapeMetrics(metrics));
             for (const protocol of this.multicodecs) {
@@ -229,7 +229,9 @@ class Gossipsub extends libp2p_1.EventEmitter {
          */
         this._libp2p = libp2p;
         this.registrar = libp2p.registrar;
-        this.score = new score_1.PeerScore(this.opts.scoreParams, libp2p.connectionManager, this.metrics);
+        this.score = new score_1.PeerScore(this.opts.scoreParams, libp2p.connectionManager, this.metrics, {
+            scoreCacheValidityMs: opts.heartbeatInterval
+        });
     }
     // LIFECYCLE METHODS
     /**
