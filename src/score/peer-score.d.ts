@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { PeerScoreParams } from './peer-score-params';
-import { IPeerStats, PeerStats } from './peer-stats';
+import { PeerStats } from './peer-stats';
 import { MessageDeliveries } from './message-deliveries';
 import ConnectionManager from 'libp2p/src/connection-manager';
 import { MsgIdStr, PeerIdStr, RejectReason, TopicStr } from '../types';
@@ -17,7 +17,7 @@ interface ScoreCacheEntry {
     /** Unix timestamp in miliseconds, the time after which the cached score for a peer is no longer valid */
     cacheUntil: number;
 }
-export declare type PeerScoreStatsDump = Record<PeerIdStr, IPeerStats>;
+export declare type PeerScoreStatsDump = Record<PeerIdStr, PeerStats>;
 export declare class PeerScore {
     readonly params: PeerScoreParams;
     private readonly connectionManager;
@@ -112,6 +112,11 @@ export declare class PeerScore {
      * Update all peer IPs to currently open connections
      */
     private updateIPs;
+    /**
+     * Returns topic stats if they exist, otherwise if the supplied parameters score the
+     * topic, inserts the default stats and returns a reference to those. If neither apply, returns None.
+     */
+    private getPtopicStats;
 }
 export {};
 //# sourceMappingURL=peer-score.d.ts.map

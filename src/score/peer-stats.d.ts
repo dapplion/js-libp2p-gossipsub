@@ -1,32 +1,17 @@
 import { TopicStr } from '../types';
-import { PeerScoreParams } from './peer-score-params';
-export declare type IPeerStats = {
-    connected: boolean;
-    expire: number;
-    topics: Record<TopicStr, TopicStats>;
-    ips: string[];
-    behaviourPenalty: number;
-};
-export declare class PeerStats {
-    private readonly params;
+export declare type PeerStats = {
     /** true if the peer is currently connected */
     connected: boolean;
     /** expiration time of the score stats for disconnected peers */
     expire: number;
     /** per topic stats */
-    topics: Map<string, TopicStats>;
+    topics: Record<TopicStr, TopicStats>;
     /** IP tracking; store as string for easy processing */
     ips: string[];
     /** behavioural pattern penalties (applied by the router) */
     behaviourPenalty: number;
-    constructor(params: PeerScoreParams, connected: boolean);
-    /**
-     * Returns topic stats if they exist, otherwise if the supplied parameters score the
-     * topic, inserts the default stats and returns a reference to those. If neither apply, returns None.
-     */
-    topicStats(topic: TopicStr): TopicStats | null;
-}
-export interface TopicStats {
+};
+export declare type TopicStats = {
     /** true if the peer is in the mesh */
     inMesh: boolean;
     /** time when the peer was (last) GRAFTed; valid only when in mesh */
@@ -43,5 +28,5 @@ export interface TopicStats {
     meshFailurePenalty: number;
     /** invalid message counter */
     invalidMessageDeliveries: number;
-}
+};
 //# sourceMappingURL=peer-stats.d.ts.map

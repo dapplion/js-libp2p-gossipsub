@@ -37,6 +37,7 @@ export interface PeerScoreParams {
      * The weight of the parameter MUST be negative (or zero to disable).
      */
     behaviourPenaltyWeight: number;
+    behaviourPenaltyThreshold: number;
     behaviourPenaltyDecay: number;
     /**
      * the decay interval for parameter counters.

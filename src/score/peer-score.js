@@ -5,7 +5,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PeerScore = void 0;
 const peer_score_params_1 = require("./peer-score-params");
-const peer_stats_1 = require("./peer-stats");
 const compute_score_1 = require("./compute-score");
 const message_deliveries_1 = require("./message-deliveries");
 const peer_id_1 = __importDefault(require("peer-id"));
@@ -74,16 +73,7 @@ class PeerScore {
         this.deliveryRecords.gc();
     }
     dumpPeerScoreStats() {
-        return Object.fromEntries(Array.from(this.peerStats.entries()).map(([peer, stats]) => [
-            peer,
-            {
-                connected: stats.connected,
-                expire: stats.expire,
-                behaviourPenalty: stats.behaviourPenalty,
-                ips: stats.ips.slice(0),
-                topics: Object.fromEntries(Array.from(stats.topics.entries()).map(([topic, tstats]) => [topic, { ...tstats }]))
-            }
-        ]));
+        return Object.fromEntries(Array.from(this.peerStats.entries()).map(([peer, stats]) => [peer, stats]));
     }
     /**
      * Decays scores, and purges score records for disconnected peers once their expiry has elapsed.
@@ -187,7 +177,13 @@ class PeerScore {
     addPeer(id) {
         // create peer stats (not including topic stats for each topic to be scored)
         // topic stats will be added as needed
-        const pstats = new peer_stats_1.PeerStats(this.params, true);
+        const pstats = {
+            connected: true,
+            expire: 0,
+            topics: {},
+            ips: [],
+            behaviourPenalty: 0
+        };
         this.peerStats.set(id, pstats);
         // get + update peer IPs
         const ips = this.getIPs(id);
@@ -224,7 +220,7 @@ class PeerScore {
     graft(id, topic) {
         const pstats = this.peerStats.get(id);
         if (pstats) {
-            const tstats = pstats.topicStats(topic);
+            const tstats = this.getPtopicStats(pstats, topic);
             if (tstats) {
                 // if we are scoring the topic, update the mesh status.
                 tstats.inMesh = true;
@@ -238,7 +234,7 @@ class PeerScore {
     prune(id, topic) {
         const pstats = this.peerStats.get(id);
         if (pstats) {
-            const tstats = pstats.topicStats(topic);
+            const tstats = this.getPtopicStats(pstats, topic);
             if (tstats) {
                 // sticky mesh delivery rate failure penalty
                 const threshold = this.params.topics[topic].meshMessageDeliveriesThreshold;
@@ -346,7 +342,7 @@ class PeerScore {
     markInvalidMessageDelivery(from, topic) {
         const pstats = this.peerStats.get(from);
         if (pstats) {
-            const tstats = pstats.topicStats(topic);
+            const tstats = this.getPtopicStats(pstats, topic);
             if (tstats) {
                 tstats.invalidMessageDeliveries += 1;
             }
@@ -360,7 +356,7 @@ class PeerScore {
     markFirstMessageDelivery(from, topic) {
         const pstats = this.peerStats.get(from);
         if (pstats) {
-            const tstats = pstats.topicStats(topic);
+            const tstats = this.getPtopicStats(pstats, topic);
             if (tstats) {
                 let cap = this.params.topics[topic].firstMessageDeliveriesCap;
                 tstats.firstMessageDeliveries = Math.max(cap, tstats.firstMessageDeliveries + 1);
@@ -379,7 +375,7 @@ class PeerScore {
         const pstats = this.peerStats.get(from);
         if (pstats) {
             const now = validatedTime !== undefined ? Date.now() : 0;
-            const tstats = pstats.topicStats(topic);
+            const tstats = this.getPtopicStats(pstats, topic);
             if (tstats) {
                 if (tstats.inMesh) {
                     const tparams = this.params.topics[topic];
@@ -471,6 +467,31 @@ class PeerScore {
             this.setIPs(id, newIPs, pstats.ips);
             pstats.ips = newIPs;
         });
+    }
+    /**
+     * Returns topic stats if they exist, otherwise if the supplied parameters score the
+     * topic, inserts the default stats and returns a reference to those. If neither apply, returns None.
+     */
+    getPtopicStats(pstats, topic) {
+        let topicStats = pstats.topics[topic];
+        if (topicStats) {
+            return topicStats;
+        }
+        if (this.params.topics[topic]) {
+            topicStats = {
+                inMesh: false,
+                graftTime: 0,
+                meshTime: 0,
+                firstMessageDeliveries: 0,
+                meshMessageDeliveries: 0,
+                meshMessageDeliveriesActive: false,
+                meshFailurePenalty: 0,
+                invalidMessageDeliveries: 0
+            };
+            pstats.topics[topic] = topicStats;
+            return topicStats;
+        }
+        return null;
     }
 }
 exports.PeerScore = PeerScore;
